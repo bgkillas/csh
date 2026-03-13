@@ -151,7 +151,7 @@ void run_command(Command command, int input, int output) {
          (dup2(output, STDOUT_FILENO) == -1 || close(output) == -1))) {
         exit(1);
     }
-    execvp(command[0], command);
+    execvp(*command, command);
     perror("execvp");
     exit(1);
 }
@@ -162,10 +162,37 @@ int cmdlen(Command *commands) {
     }
     return i;
 }
+char *CURRENT_DIR;
+int builtin(Command command) {
+    if (strcmp(*command, "exit") == 0) {
+        exit(0);
+    } else if (strcmp(*command, "cd") == 0) {
+        int len = strlen(command[1]);
+        if (strlen(CURRENT_DIR) > len) {
+            free(CURRENT_DIR);
+            CURRENT_DIR = malloc(len + 1);
+            if (CURRENT_DIR == NULL) {
+                perror("malloc");
+                exit(1);
+            }
+        }
+        strcpy(CURRENT_DIR, command[1]);
+        chdir(command[1]);
+        return 0;
+    } else {
+        return -1;
+    }
+}
 int run_commands(Command *commands) {
     int count = cmdlen(commands);
     if (count == 0) {
         return 0;
+    }
+    if (count == 1) {
+        int ret = builtin(*commands);
+        if (ret != -1) {
+            return ret;
+        }
     }
     int *pipes = malloc(sizeof(int) * count);
     if (pipes == 0) {
@@ -232,34 +259,33 @@ int run_commands(Command *commands) {
 int main() {
     int ret = 0;
     using_history();
+    char *dir = get_current_dir_name();
+    CURRENT_DIR = malloc(strlen(dir) + 1);
+    if (CURRENT_DIR == NULL) {
+        perror("malloc");
+        return 1;
+    }
+    strcpy(CURRENT_DIR, dir);
     while (true) {
-        char *dir = get_current_dir_name();
-        int size = snprintf(NULL, 0, "%s %d ", dir, ret) + 1;
+        int size = snprintf(NULL, 0, "%s %d ", CURRENT_DIR, ret) + 1;
         char *prompt = malloc(size);
         if (prompt == NULL) {
             return 1;
         }
-        snprintf(prompt, size, "%s %d ", dir, ret);
+        snprintf(prompt, size, "%s %d ", CURRENT_DIR, ret);
         char *line = readline(prompt);
-        free(dir);
         free(prompt);
         if (line == NULL) {
             return 1;
         }
-        if (strcmp(line, "exit") == 0) {
-            free(line);
-            break;
-        }
         add_history(line);
         Command *commands = get_commands(line);
+        free(line);
         if (commands == NULL) {
             printf("ERROR\n");
         } else {
             ret = run_commands(commands);
             free_commands(commands);
         }
-        free(line);
     }
-    clear_history();
-    return 0;
 }
