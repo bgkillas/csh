@@ -4,7 +4,7 @@
 #include <readline/history.h>
 #include <readline/readline.h>
 #include <sys/wait.h>
-char *get_current_dir_name(void);
+char *get_current_dir_name();
 typedef char *Arg;
 typedef Arg *Command;
 enum State { NONE, SINGLEQUOTE, DOUBLEQUOTE, ESCAPE };
@@ -24,16 +24,19 @@ void free_commands(Command *commands) {
 Command *get_commands(char *line) {
     Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
     if (commands == NULL) {
+        perror("malloc");
         exit(1);
     }
     int i = 0;
     commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
     if (commands[i] == NULL) {
+        perror("malloc");
         exit(1);
     }
     int j = 0;
     commands[i][j] = malloc(strlen(line) + 1);
     if (commands[i][j] == NULL) {
+        perror("malloc");
         free_commands(commands);
         exit(1);
     }
@@ -72,11 +75,13 @@ Command *get_commands(char *line) {
                 i++;
                 commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
                 if (commands[i] == NULL) {
+                    perror("malloc");
                     free_commands(commands);
                     exit(1);
                 }
                 commands[i][j] = malloc(strlen(line) + 1);
                 if (commands[i][j] == NULL) {
+                    perror("malloc");
                     free_commands(commands);
                     exit(1);
                 }
@@ -88,6 +93,7 @@ Command *get_commands(char *line) {
                     j++;
                     commands[i][j] = malloc(strlen(line) + 1);
                     if (commands[i][j] == NULL) {
+                        perror("malloc");
                         free_commands(commands);
                         exit(1);
                     }
@@ -138,7 +144,7 @@ Command *get_commands(char *line) {
     }
     return commands;
 }
-int run_command(Command command, int input, int output) {
+void run_command(Command command, int input, int output) {
     if ((input != STDIN_FILENO &&
          (dup2(input, STDIN_FILENO) == -1 || close(input) == -1)) ||
         (output != STDOUT_FILENO &&
@@ -146,25 +152,43 @@ int run_command(Command command, int input, int output) {
         exit(1);
     }
     execvp(command[0], command);
+    perror("execvp");
     exit(1);
 }
+int cmdlen(Command *commands) {
+    int i = 0;
+    while (commands[i] != NULL) {
+        i++;
+    }
+    return i;
+}
 int run_commands(Command *commands) {
-    if (*commands == NULL) {
+    int count = cmdlen(commands);
+    if (count == 0) {
         return 0;
+    }
+    int *pipes = malloc(sizeof(int) * count);
+    if (pipes == 0) {
+        perror("malloc");
+        exit(1);
     }
     int last = STDIN_FILENO;
     int p[2];
-    if (pipe(p) == -1) {
-        exit(1);
-    }
-    int pid;
+    int pid = 0;
     while (*commands != NULL) {
+        if (pipe(p) == -1) {
+            perror("pipe");
+            exit(1);
+        }
+        *pipes = p[0];
         pid = fork();
         if (pid == -1) {
+            perror("fork");
             exit(1);
         }
         if (pid == 0) {
             if (close(p[0]) == -1) {
+                perror("close");
                 exit(1);
             }
             if (commands[1] == NULL) {
@@ -173,21 +197,36 @@ int run_commands(Command *commands) {
             run_command(*commands, last, p[1]);
         }
         if (close(p[1]) == -1) {
+            perror("close");
             exit(1);
         }
         last = p[0];
-        commands = commands + 1;
-        if (commands[1] != NULL && pipe(p) == -1) {
+        commands++;
+        pipes++;
+    }
+    pipes -= count;
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        perror("waitpid");
+        exit(1);
+    }
+    if (!WIFEXITED(status)) {
+        printf("unreachable\n");
+        exit(1);
+    }
+    for (int i = 1; i < count; i++) {
+        if (wait(0) == -1) {
+            perror("wait");
             exit(1);
         }
     }
-    int status;
-    waitpid(pid, &status, 0);
-    if (!WIFEXITED(status)) {
-        exit(1);
+    for (int i = 0; i < count; i++) {
+        if (close(pipes[i]) == -1) {
+            perror("close");
+            exit(1);
+        }
     }
-    while (wait(0) != -1) {
-    };
+    free(pipes);
     return WEXITSTATUS(status);
 }
 int main() {

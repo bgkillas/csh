@@ -1,7 +1,7 @@
 build: debug
-	gcc src/main.c -o target/debug/csh -lreadline
+	gcc -Wall src/main.c -o target/debug/csh -lreadline -g
 build-release: release
-	gcc -O4 src/main.c -o target/release/csh -lreadline
+	gcc -Wall src/main.c -o target/release/csh -lreadline -O4
 run: build
 	./target/debug/csh
 run-release: build-release
