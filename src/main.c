@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <readline/history.h>
 #include <readline/readline.h>
+#include <sys/wait.h>
 char *get_current_dir_name(void);
 typedef char *Arg;
 typedef Arg *Command;
@@ -123,6 +124,11 @@ Command *get_commands(char *line) {
         last = *line;
         line = line + 1;
     }
+    if (i == 0 && j == 0 && k == 0) {
+        free(commands[i][j]);
+        commands[i] = NULL;
+        return commands;
+    }
     commands[i][j][k] = '\0';
     commands[i][j + 1] = NULL;
     commands[i + 1] = NULL;
@@ -132,19 +138,57 @@ Command *get_commands(char *line) {
     }
     return commands;
 }
-int run_commands(Command *commands) {
-    int i = 0;
-    while (commands[i] != NULL) {
-        int j = 0;
-        while (commands[i][j] != NULL) {
-            printf("\"%s\" ", commands[i][j]);
-            j++;
-        }
-        printf("\n");
-        i++;
+int run_command(Command command, int input, int output) {
+    if (input != STDIN_FILENO &&
+            (dup2(input, STDIN_FILENO) == -1 || close(input) == -1) ||
+        output != STDOUT_FILENO &&
+            (dup2(output, STDOUT_FILENO) == -1 || close(output) == -1)) {
+        exit(1);
     }
-    // TODO
-    return 0;
+    execvp(command[0], command);
+    exit(1);
+}
+int run_commands(Command *commands) {
+    if (*commands == NULL) {
+        return 0;
+    }
+    int last = STDIN_FILENO;
+    int p[2];
+    if (pipe(p) < 0) {
+        exit(1);
+    }
+    int pid;
+    while (*commands != NULL) {
+        pid = fork();
+        if (pid == -1) {
+            exit(1);
+        }
+        if (pid == 0) {
+            if (commands[1] == NULL) {
+                p[1] = STDOUT_FILENO;
+            }
+            run_command(*commands, p[0], p[1]);
+        }
+        p[1] = last;
+        last = p[0];
+        commands = commands + 1;
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status)) {
+        exit(1);
+    }
+    while (true) {
+        switch (wait(0)) {
+        case -1:
+            exit(1);
+            break;
+        case 0:
+            return WEXITSTATUS(status);
+        default:
+            break;
+        }
+    };
 }
 int main() {
     int ret = 0;
