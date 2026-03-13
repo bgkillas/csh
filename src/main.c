@@ -139,10 +139,10 @@ Command *get_commands(char *line) {
     return commands;
 }
 int run_command(Command command, int input, int output) {
-    if (input != STDIN_FILENO &&
-            (dup2(input, STDIN_FILENO) == -1 || close(input) == -1) ||
-        output != STDOUT_FILENO &&
-            (dup2(output, STDOUT_FILENO) == -1 || close(output) == -1)) {
+    if ((input != STDIN_FILENO &&
+         (dup2(input, STDIN_FILENO) == -1 || close(input) == -1)) ||
+        (output != STDOUT_FILENO &&
+         (dup2(output, STDOUT_FILENO) == -1 || close(output) == -1))) {
         exit(1);
     }
     execvp(command[0], command);
@@ -154,7 +154,7 @@ int run_commands(Command *commands) {
     }
     int last = STDIN_FILENO;
     int p[2];
-    if (pipe(p) < 0) {
+    if (pipe(p) == -1) {
         exit(1);
     }
     int pid;
@@ -164,31 +164,31 @@ int run_commands(Command *commands) {
             exit(1);
         }
         if (pid == 0) {
+            if (close(p[0]) == -1) {
+                exit(1);
+            }
             if (commands[1] == NULL) {
                 p[1] = STDOUT_FILENO;
             }
-            run_command(*commands, p[0], p[1]);
+            run_command(*commands, last, p[1]);
         }
-        p[1] = last;
+        if (close(p[1]) == -1) {
+            exit(1);
+        }
         last = p[0];
         commands = commands + 1;
+        if (commands[1] != NULL && pipe(p) == -1) {
+            exit(1);
+        }
     }
     int status;
     waitpid(pid, &status, 0);
     if (!WIFEXITED(status)) {
         exit(1);
     }
-    while (true) {
-        switch (wait(0)) {
-        case -1:
-            exit(1);
-            break;
-        case 0:
-            return WEXITSTATUS(status);
-        default:
-            break;
-        }
+    while (wait(0) != -1) {
     };
+    return WEXITSTATUS(status);
 }
 int main() {
     int ret = 0;
