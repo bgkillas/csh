@@ -22,10 +22,20 @@ void free_commands(Command *commands) {
 }
 Command *get_commands(char *line) {
     Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
+    if (commands == NULL) {
+        exit(1);
+    }
     int i = 0;
     commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
+    if (commands[i] == NULL) {
+        exit(1);
+    }
     int j = 0;
     commands[i][j] = malloc(strlen(line) + 1);
+    if (commands[i][j] == NULL) {
+        free_commands(commands);
+        exit(1);
+    }
     int k = 0;
     int last = '\0';
     enum State state = NONE;
@@ -60,7 +70,15 @@ Command *get_commands(char *line) {
                 j = 0;
                 i++;
                 commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
+                if (commands[i] == NULL) {
+                    free_commands(commands);
+                    exit(1);
+                }
                 commands[i][j] = malloc(strlen(line) + 1);
+                if (commands[i][j] == NULL) {
+                    free_commands(commands);
+                    exit(1);
+                }
                 break;
             case ' ':
                 if (last != ' ' && last != '|' && last != '\0') {
@@ -68,6 +86,10 @@ Command *get_commands(char *line) {
                     k = 0;
                     j++;
                     commands[i][j] = malloc(strlen(line) + 1);
+                    if (commands[i][j] == NULL) {
+                        free_commands(commands);
+                        exit(1);
+                    }
                 }
                 break;
             default:
@@ -131,6 +153,9 @@ int main() {
         char *dir = get_current_dir_name();
         int size = snprintf(NULL, 0, "%s %d ", dir, ret) + 1;
         char *prompt = malloc(size);
+        if (prompt == NULL) {
+            return 1;
+        }
         snprintf(prompt, size, "%s %d ", dir, ret);
         char *line = readline(prompt);
         free(dir);
@@ -152,5 +177,6 @@ int main() {
         }
         free(line);
     }
+    clear_history();
     return 0;
 }
