@@ -7,7 +7,6 @@
 char *get_current_dir_name();
 typedef char *Arg;
 typedef Arg *Command;
-enum State { NONE, SINGLEQUOTE, DOUBLEQUOTE, ESCAPE };
 void free_commands(Command *commands) {
     int i = 0;
     while (commands[i] != NULL) {
@@ -20,129 +19,6 @@ void free_commands(Command *commands) {
         i++;
     }
     free(commands);
-}
-Command *get_commands(char *line) {
-    Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
-    if (commands == NULL) {
-        perror("malloc");
-        exit(1);
-    }
-    int i = 0;
-    commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
-    if (commands[i] == NULL) {
-        perror("malloc");
-        exit(1);
-    }
-    int j = 0;
-    commands[i][j] = malloc(strlen(line) + 1);
-    if (commands[i][j] == NULL) {
-        perror("malloc");
-        free_commands(commands);
-        exit(1);
-    }
-    int k = 0;
-    int last = '\0';
-    enum State state = NONE;
-    while (*line != '\0') {
-        switch (state) {
-        case NONE:
-            switch (*line) {
-            case '\\':
-                state = ESCAPE;
-                break;
-            case '"':
-                state = DOUBLEQUOTE;
-                break;
-            case '\'':
-                state = SINGLEQUOTE;
-                break;
-            case '|':
-                commands[i][j][k] = '\0';
-                if (last == '|' || last == '\0' || (last == ' ' && j == 0)) {
-                    commands[i][j + 1] = NULL;
-                    commands[i + 1] = NULL;
-                    free_commands(commands);
-                    return NULL;
-                }
-                k = 0;
-                if (last == ' ') {
-                    free(commands[i][j]);
-                    commands[i][j] = NULL;
-                } else {
-                    commands[i][j + 1] = NULL;
-                }
-                j = 0;
-                i++;
-                commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
-                if (commands[i] == NULL) {
-                    perror("malloc");
-                    free_commands(commands);
-                    exit(1);
-                }
-                commands[i][j] = malloc(strlen(line) + 1);
-                if (commands[i][j] == NULL) {
-                    perror("malloc");
-                    free_commands(commands);
-                    exit(1);
-                }
-                break;
-            case ' ':
-                if (last != ' ' && last != '|' && last != '\0') {
-                    commands[i][j][k] = '\0';
-                    k = 0;
-                    j++;
-                    commands[i][j] = malloc(strlen(line) + 1);
-                    if (commands[i][j] == NULL) {
-                        perror("malloc");
-                        free_commands(commands);
-                        exit(1);
-                    }
-                }
-                break;
-            default:
-                commands[i][j][k] = *line;
-                k++;
-                break;
-            }
-            break;
-        case SINGLEQUOTE:
-            if (*line == '\'') {
-                state = NONE;
-            } else {
-                commands[i][j][k] = *line;
-                k++;
-            }
-            break;
-        case DOUBLEQUOTE:
-            if (*line == '\"') {
-                state = NONE;
-            } else {
-                commands[i][j][k] = *line;
-                k++;
-            }
-            break;
-        case ESCAPE:
-            commands[i][j][k] = *line;
-            k++;
-            state = NONE;
-            break;
-        }
-        last = *line;
-        line = line + 1;
-    }
-    if (i == 0 && j == 0 && k == 0) {
-        free(commands[i][j]);
-        commands[i] = NULL;
-        return commands;
-    }
-    commands[i][j][k] = '\0';
-    commands[i][j + 1] = NULL;
-    commands[i + 1] = NULL;
-    if (state != NONE || last == '|') {
-        free_commands(commands);
-        return NULL;
-    }
-    return commands;
 }
 void run_command(Command command, int input, int output) {
     if ((input != STDIN_FILENO &&
@@ -165,9 +41,19 @@ int cmdlen(Command *commands) {
 char *CURRENT_DIR;
 int builtin(Command command) {
     if (strcmp(*command, "exit") == 0) {
-        exit(0);
+        if (command[1] != NULL) {
+            exit(strtol(command[1], NULL, 10));
+        } else {
+            exit(0);
+        }
     } else if (strcmp(*command, "cd") == 0) {
-        int len = strlen(command[1]);
+        char *new_dir;
+        if (command[1] != NULL) {
+            new_dir = command[1];
+        } else {
+            new_dir = "/home";
+        }
+        int len = strlen(new_dir);
         if (strlen(CURRENT_DIR) > len) {
             free(CURRENT_DIR);
             CURRENT_DIR = malloc(len + 1);
@@ -176,9 +62,25 @@ int builtin(Command command) {
                 exit(1);
             }
         }
-        strcpy(CURRENT_DIR, command[1]);
-        chdir(command[1]);
+        strcpy(CURRENT_DIR, new_dir);
+        chdir(new_dir);
         return 0;
+    } else if (strcmp(*command, "sleep") == 0) {
+        if (command[1] != NULL) {
+            sleep(strtol(command[1], NULL, 10));
+            return 0;
+        } else {
+            return 1;
+        }
+    } else if (strcmp(*command, "exec") == 0) {
+        if (command[1] != NULL) {
+            command++;
+            execvp(*command, command);
+            perror("execvp");
+            exit(1);
+        } else {
+            return 1;
+        }
     } else {
         return -1;
     }
@@ -256,6 +158,162 @@ int run_commands(Command *commands) {
     free(pipes);
     return WEXITSTATUS(status);
 }
+enum State { NONE, SINGLEQUOTE, DOUBLEQUOTE, ESCAPE, COMMAND };
+Command *get_commands(char *line, char is_command) {
+    Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
+    if (commands == NULL) {
+        perror("malloc");
+        exit(1);
+    }
+    int i = 0;
+    commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
+    if (commands[i] == NULL) {
+        perror("malloc");
+        exit(1);
+    }
+    int j = 0;
+    commands[i][j] = malloc(strlen(line) + 1);
+    if (commands[i][j] == NULL) {
+        perror("malloc");
+        free_commands(commands);
+        exit(1);
+    }
+    int k = 0;
+    int last = '\0';
+    enum State state = NONE;
+    while (*line != '\0') {
+        switch (state) {
+        case NONE:
+            switch (*line) {
+            case '\\':
+                state = ESCAPE;
+                break;
+            case '"':
+                state = DOUBLEQUOTE;
+                break;
+            case '\'':
+                state = SINGLEQUOTE;
+                break;
+            case '$':
+                line++;
+                state = COMMAND;
+                break;
+            case '|':
+                commands[i][j][k] = '\0';
+                if (last == '|' || last == '\0' || (last == ' ' && j == 0)) {
+                    commands[i][j + 1] = NULL;
+                    commands[i + 1] = NULL;
+                    free_commands(commands);
+                    return NULL;
+                }
+                k = 0;
+                if (last == ' ') {
+                    free(commands[i][j]);
+                    commands[i][j] = NULL;
+                } else {
+                    commands[i][j + 1] = NULL;
+                }
+                j = 0;
+                i++;
+                commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
+                if (commands[i] == NULL) {
+                    perror("malloc");
+                    free_commands(commands);
+                    exit(1);
+                }
+                commands[i][j] = malloc(strlen(line) + 1);
+                if (commands[i][j] == NULL) {
+                    perror("malloc");
+                    free_commands(commands);
+                    exit(1);
+                }
+                break;
+            case ' ':
+                if (last != ' ' && last != '|' && last != '\0') {
+                    commands[i][j][k] = '\0';
+                    k = 0;
+                    j++;
+                    commands[i][j] = malloc(strlen(line) + 1);
+                    if (commands[i][j] == NULL) {
+                        perror("malloc");
+                        free_commands(commands);
+                        exit(1);
+                    }
+                }
+                break;
+            default:
+                if (is_command && *line == ')') {
+                    if (i == 0 && j == 0 && k == 0) {
+                        free(commands[i][j]);
+                        commands[i] = NULL;
+                        return commands;
+                    }
+                    commands[i][j][k] = '\0';
+                    if (last == ' ') {
+                        free(commands[i][j]);
+                        commands[i][j] = NULL;
+                    } else {
+                        commands[i][j + 1] = NULL;
+                    }
+                    commands[i + 1] = NULL;
+                    if (state != NONE || last == '|') {
+                        free_commands(commands);
+                        return NULL;
+                    }
+                    return commands;
+                }
+                commands[i][j][k] = *line;
+                k++;
+                break;
+            }
+            break;
+        case SINGLEQUOTE:
+            if (*line == '\'') {
+                state = NONE;
+            } else {
+                commands[i][j][k] = *line;
+                k++;
+            }
+            break;
+        case DOUBLEQUOTE:
+            if (*line == '\"') {
+                state = NONE;
+            } else {
+                commands[i][j][k] = *line;
+                k++;
+            }
+            break;
+        case ESCAPE:
+            commands[i][j][k] = *line;
+            k++;
+            state = NONE;
+            break;
+        case COMMAND:
+            // TODO
+            break;
+        }
+        last = *line;
+        line++;
+    }
+    if (i == 0 && j == 0 && k == 0) {
+        free(commands[i][j]);
+        commands[i] = NULL;
+        return commands;
+    }
+    commands[i][j][k] = '\0';
+    if (last == ' ') {
+        free(commands[i][j]);
+        commands[i][j] = NULL;
+    } else {
+        commands[i][j + 1] = NULL;
+    }
+    commands[i + 1] = NULL;
+    if (state != NONE || last == '|') {
+        free_commands(commands);
+        return NULL;
+    }
+    return commands;
+}
 int main() {
     int ret = 0;
     using_history();
@@ -279,7 +337,7 @@ int main() {
             return 1;
         }
         add_history(line);
-        Command *commands = get_commands(line);
+        Command *commands = get_commands(line, 0);
         free(line);
         if (commands == NULL) {
             printf("ERROR\n");
