@@ -7,6 +7,7 @@
 char *get_current_dir_name();
 typedef char *Arg;
 typedef Arg *Command;
+int BUF_SIZE = 65535;
 void free_commands(Command *commands) {
     int i = 0;
     while (commands[i] != NULL) {
@@ -85,15 +86,23 @@ int builtin(Command command) {
         return -1;
     }
 }
-int run_commands(Command *commands) {
+struct RunCommand {
+    int ret;
+    int pipe;
+};
+struct RunCommand run_commands(Command *commands, char is_command) {
+    struct RunCommand retu;
+    retu.pipe = -1;
     int count = cmdlen(commands);
     if (count == 0) {
-        return 0;
+        retu.ret = 0;
+        return retu;
     }
     if (count == 1) {
         int ret = builtin(*commands);
         if (ret != -1) {
-            return ret;
+            retu.ret = ret;
+            return retu;
         }
     }
     int *pipes = malloc(sizeof(int) * count);
@@ -120,7 +129,7 @@ int run_commands(Command *commands) {
                 perror("close");
                 exit(1);
             }
-            if (commands[1] == NULL) {
+            if (commands[1] == NULL && !is_command) {
                 p[1] = STDOUT_FILENO;
             }
             run_command(*commands, last, p[1]);
@@ -150,17 +159,26 @@ int run_commands(Command *commands) {
         }
     }
     for (int i = 0; i < count; i++) {
-        if (close(pipes[i]) == -1) {
+        if ((!is_command || last != pipes[i]) && close(pipes[i]) == -1) {
             perror("close");
             exit(1);
         }
     }
     free(pipes);
-    return WEXITSTATUS(status);
+    retu.ret = WEXITSTATUS(status);
+    retu.pipe = last;
+    return retu;
 }
-enum State { NONE, SINGLEQUOTE, DOUBLEQUOTE, ESCAPE, COMMAND };
-Command *get_commands(char *line, char is_command) {
+struct CommandReturn {
+    Command *command;
+    int length;
+};
+enum State { NONE, SINGLEQUOTE, DOUBLEQUOTE, ESCAPE, SPECIAL, COMMAND };
+struct CommandReturn get_commands(char *line, char is_command) {
     Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
+    struct CommandReturn ret;
+    ret.command = commands;
+    ret.length = 0;
     if (commands == NULL) {
         perror("malloc");
         exit(1);
@@ -195,8 +213,7 @@ Command *get_commands(char *line, char is_command) {
                 state = SINGLEQUOTE;
                 break;
             case '$':
-                line++;
-                state = COMMAND;
+                state = SPECIAL;
                 break;
             case '|':
                 commands[i][j][k] = '\0';
@@ -204,7 +221,8 @@ Command *get_commands(char *line, char is_command) {
                     commands[i][j + 1] = NULL;
                     commands[i + 1] = NULL;
                     free_commands(commands);
-                    return NULL;
+                    ret.command = NULL;
+                    return ret;
                 }
                 k = 0;
                 if (last == ' ') {
@@ -246,7 +264,7 @@ Command *get_commands(char *line, char is_command) {
                     if (i == 0 && j == 0 && k == 0) {
                         free(commands[i][j]);
                         commands[i] = NULL;
-                        return commands;
+                        return ret;
                     }
                     commands[i][j][k] = '\0';
                     if (last == ' ') {
@@ -258,9 +276,10 @@ Command *get_commands(char *line, char is_command) {
                     commands[i + 1] = NULL;
                     if (state != NONE || last == '|') {
                         free_commands(commands);
-                        return NULL;
+                        ret.command = NULL;
+                        return ret;
                     }
-                    return commands;
+                    return ret;
                 }
                 commands[i][j][k] = *line;
                 k++;
@@ -288,17 +307,75 @@ Command *get_commands(char *line, char is_command) {
             k++;
             state = NONE;
             break;
+        case SPECIAL:
+            if (*line == '(') {
+                state = COMMAND;
+            } else {
+                free_commands(commands);
+                ret.command = NULL;
+                return ret;
+            }
+            break;
         case COMMAND:
-            // TODO
+            struct CommandReturn c = get_commands(line, 1);
+            line += c.length;
+            state = NONE;
+            struct RunCommand retu = run_commands(c.command, 1);
+            if (retu.pipe != -1) {
+                char *buf = malloc(BUF_SIZE);
+                if (buf == NULL) {
+                    perror("malloc");
+                    exit(1);
+                }
+                int size = 0;
+                int cap = BUF_SIZE;
+                while (true) {
+                    int num = read(retu.pipe, buf, BUF_SIZE);
+                    if (num == -1) {
+                        perror("read");
+                        exit(1);
+                    }
+                    if (num == 0) {
+                        break;
+                    }
+                    size += num;
+                    if (size + BUF_SIZE >= cap) {
+                        cap += BUF_SIZE;
+                        buf = realloc(buf, cap);
+                        if (buf == 0) {
+                            perror("realloc");
+                            exit(1);
+                        }
+                    }
+                }
+                if (close(retu.pipe) == -1) {
+                    perror("close");
+                    exit(1);
+                }
+                if (size >= c.length) {
+                    commands[i][j] = realloc(commands[i][j],
+                                             ret.length + strlen(line) + size);
+                    if (commands[i][j] == 0) {
+                        perror("realloc");
+                        exit(1);
+                    }
+                }
+                commands[i][j][k] = '\0';
+                strcat(commands[i][j], buf);
+                k += size;
+                free(buf);
+                free(c.command);
+            }
             break;
         }
         last = *line;
         line++;
+        ret.length++;
     }
     if (i == 0 && j == 0 && k == 0) {
         free(commands[i][j]);
         commands[i] = NULL;
-        return commands;
+        return ret;
     }
     commands[i][j][k] = '\0';
     if (last == ' ') {
@@ -308,11 +385,12 @@ Command *get_commands(char *line, char is_command) {
         commands[i][j + 1] = NULL;
     }
     commands[i + 1] = NULL;
-    if (state != NONE || last == '|') {
+    if (state != NONE || last == '|' || is_command) {
         free_commands(commands);
-        return NULL;
+        ret.command = NULL;
+        return ret;
     }
-    return commands;
+    return ret;
 }
 int main() {
     int ret = 0;
@@ -337,12 +415,12 @@ int main() {
             return 1;
         }
         add_history(line);
-        Command *commands = get_commands(line, 0);
+        Command *commands = get_commands(line, 0).command;
         free(line);
         if (commands == NULL) {
             printf("ERROR\n");
         } else {
-            ret = run_commands(commands);
+            ret = run_commands(commands, 0).ret;
             free_commands(commands);
         }
     }
