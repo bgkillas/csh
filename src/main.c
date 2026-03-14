@@ -414,7 +414,9 @@ int main() {
         if (line == NULL) {
             return 1;
         }
-        add_history(line);
+        if (strlen(line) != 0) {
+            add_history(line);
+        }
         Command *commands = get_commands(line, 0).command;
         free(line);
         if (commands == NULL) {
