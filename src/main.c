@@ -86,23 +86,15 @@ int builtin(Command command) {
         return -1;
     }
 }
-struct RunCommand {
-    int ret;
-    int pipe;
-};
-struct RunCommand run_commands(Command *commands, char is_command) {
-    struct RunCommand retu;
-    retu.pipe = -1;
+int run_commands(Command *commands, char **str) {
     int count = cmdlen(commands);
     if (count == 0) {
-        retu.ret = 0;
-        return retu;
+        return 0;
     }
     if (count == 1) {
         int ret = builtin(*commands);
         if (ret != -1) {
-            retu.ret = ret;
-            return retu;
+            return ret;
         }
     }
     int *pipes = malloc(sizeof(int) * count);
@@ -129,7 +121,7 @@ struct RunCommand run_commands(Command *commands, char is_command) {
                 perror("close");
                 exit(1);
             }
-            if (commands[1] == NULL && !is_command) {
+            if (commands[1] == NULL && str == NULL) {
                 p[1] = STDOUT_FILENO;
             }
             run_command(*commands, last, p[1]);
@@ -142,14 +134,34 @@ struct RunCommand run_commands(Command *commands, char is_command) {
         commands++;
         pipes++;
     }
+    if (str != NULL) {
+        int size = 0;
+        int cap = BUF_SIZE;
+        while (true) {
+            int num = read(last, *str + size, BUF_SIZE);
+            if (num == -1) {
+                perror("read");
+                exit(1);
+            }
+            if (num == 0) {
+                break;
+            }
+            size += num;
+            if (size + BUF_SIZE >= cap) {
+                cap += BUF_SIZE;
+                *str = realloc(*str, cap);
+                if (*str == 0) {
+                    perror("realloc");
+                    exit(1);
+                }
+            }
+        }
+        (*str)[size] = '\0';
+    }
     pipes -= count;
     int status;
     if (waitpid(pid, &status, 0) == -1) {
         perror("waitpid");
-        exit(1);
-    }
-    if (!WIFEXITED(status)) {
-        printf("unreachable\n");
         exit(1);
     }
     for (int i = 1; i < count; i++) {
@@ -159,15 +171,16 @@ struct RunCommand run_commands(Command *commands, char is_command) {
         }
     }
     for (int i = 0; i < count; i++) {
-        if ((!is_command || last != pipes[i]) && close(pipes[i]) == -1) {
+        if (close(pipes[i]) == -1) {
             perror("close");
             exit(1);
         }
     }
     free(pipes);
-    retu.ret = WEXITSTATUS(status);
-    retu.pipe = last;
-    return retu;
+    if (!WIFEXITED(status)) {
+        return 1;
+    }
+    return WEXITSTATUS(status);
 }
 struct CommandReturn {
     Command *command;
@@ -320,52 +333,26 @@ struct CommandReturn get_commands(char *line, char is_command) {
             struct CommandReturn c = get_commands(line, 1);
             line += c.length;
             state = NONE;
-            struct RunCommand retu = run_commands(c.command, 1);
-            if (retu.pipe != -1) {
-                char *buf = malloc(BUF_SIZE);
-                if (buf == NULL) {
-                    perror("malloc");
-                    exit(1);
-                }
-                int size = 0;
-                int cap = BUF_SIZE;
-                while (true) {
-                    int num = read(retu.pipe, buf, BUF_SIZE);
-                    if (num == -1) {
-                        perror("read");
-                        exit(1);
-                    }
-                    if (num == 0) {
-                        break;
-                    }
-                    size += num;
-                    if (size + BUF_SIZE >= cap) {
-                        cap += BUF_SIZE;
-                        buf = realloc(buf, cap);
-                        if (buf == 0) {
-                            perror("realloc");
-                            exit(1);
-                        }
-                    }
-                }
-                if (close(retu.pipe) == -1) {
-                    perror("close");
-                    exit(1);
-                }
-                if (size >= c.length) {
-                    commands[i][j] = realloc(commands[i][j],
-                                             ret.length + strlen(line) + size);
-                    if (commands[i][j] == 0) {
-                        perror("realloc");
-                        exit(1);
-                    }
-                }
-                commands[i][j][k] = '\0';
-                strncat(commands[i][j], buf, size);
-                k += size;
-                free(buf);
-                free_commands(c.command);
+            char *buf = malloc(BUF_SIZE);
+            if (buf == NULL) {
+                perror("malloc");
+                exit(1);
             }
+            *buf = '\0';
+            run_commands(c.command, &buf);
+            if (strlen(buf) >= c.length) {
+                commands[i][j] = realloc(
+                    commands[i][j], ret.length + strlen(line) + strlen(buf));
+                if (commands[i][j] == 0) {
+                    perror("realloc");
+                    exit(1);
+                }
+            }
+            commands[i][j][k] = '\0';
+            strcat(commands[i][j], buf);
+            k += strlen(buf);
+            free(buf);
+            free_commands(c.command);
             break;
         }
         last = *line;
@@ -422,7 +409,7 @@ int main() {
         if (commands == NULL) {
             printf("ERROR\n");
         } else {
-            ret = run_commands(commands, 0).ret;
+            ret = run_commands(commands, NULL);
             free_commands(commands);
         }
     }
