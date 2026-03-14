@@ -361,10 +361,10 @@ struct CommandReturn get_commands(char *line, char is_command) {
                     }
                 }
                 commands[i][j][k] = '\0';
-                strcat(commands[i][j], buf);
+                strncat(commands[i][j], buf, size);
                 k += size;
                 free(buf);
-                free(c.command);
+                free_commands(c.command);
             }
             break;
         }
