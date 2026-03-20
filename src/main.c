@@ -88,7 +88,7 @@ int builtin(Command command) {
         return -1;
     }
 }
-int run_commands(Command *commands, char **str, char *file) {
+int run_commands(Command *commands, char **str, char *file, char forget) {
     int count = cmdlen(commands);
     if (count == 0) {
         return 0;
@@ -179,6 +179,9 @@ int run_commands(Command *commands, char **str, char *file) {
             write(fp, s, num);
         }
     }
+    if (forget) {
+        return 0;
+    }
     pipes -= count;
     int status;
     if (waitpid(pid, &status, 0) == -1) {
@@ -222,6 +225,7 @@ int run_commands(Command *commands, char **str, char *file) {
 struct CommandReturn {
     Command *command;
     char *file;
+    char forget;
     int length;
 };
 enum State { NONE, SINGLEQUOTE, DOUBLEQUOTE, ESCAPE, SPECIAL, COMMAND, FILEO };
@@ -229,6 +233,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
     Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
     struct CommandReturn ret;
     ret.file = NULL;
+    ret.forget = 0;
     ret.command = commands;
     ret.length = 0;
     if (commands == NULL) {
@@ -260,6 +265,10 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 break;
             case '>':
                 state = FILEO;
+                break;
+            case '&':
+                ret.forget = 1;
+                line = "\0\0";
                 break;
             case '"':
                 state = DOUBLEQUOTE;
@@ -392,7 +401,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
-            run_commands(c.command, &buf, NULL);
+            run_commands(c.command, &buf, NULL, 0);
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
                     commands[i][j], ret.length + strlen(line) + strlen(buf));
@@ -470,7 +479,8 @@ int main() {
         if (commands.command == NULL) {
             printf("ERROR\n");
         } else {
-            ret = run_commands(commands.command, NULL, commands.file);
+            ret = run_commands(commands.command, NULL, commands.file,
+                               commands.forget);
             free_commands(commands.command);
         }
         if (commands.file != NULL) {
