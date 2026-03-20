@@ -4,6 +4,7 @@
 #include <readline/history.h>
 #include <readline/readline.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 char *get_current_dir_name();
 typedef char *Arg;
 typedef Arg *Command;
@@ -86,7 +87,7 @@ int builtin(Command command) {
         return -1;
     }
 }
-int run_commands(Command *commands, char **str) {
+int run_commands(Command *commands, char **str, char *file) {
     int count = cmdlen(commands);
     if (count == 0) {
         return 0;
@@ -121,7 +122,7 @@ int run_commands(Command *commands, char **str) {
                 perror("close");
                 exit(1);
             }
-            if (commands[1] == NULL && str == NULL) {
+            if (commands[1] == NULL && str == NULL && file == NULL) {
                 p[1] = STDOUT_FILENO;
             }
             run_command(*commands, last, p[1]);
@@ -150,13 +151,32 @@ int run_commands(Command *commands, char **str) {
             if (size + BUF_SIZE >= cap) {
                 cap += BUF_SIZE;
                 *str = realloc(*str, cap);
-                if (*str == 0) {
+                if (*str == NULL) {
                     perror("realloc");
                     exit(1);
                 }
             }
         }
         (*str)[size] = '\0';
+    }
+    if (file != NULL) {
+        int fp = open(file, O_CREAT | O_WRONLY, 0644);
+        char *s = malloc(BUF_SIZE);
+        if (s == NULL) {
+            perror("malloc");
+            exit(1);
+        }
+        while (true) {
+            int num = read(last, s, BUF_SIZE);
+            if (num == -1) {
+                perror("read");
+                exit(1);
+            }
+            if (num == 0) {
+                break;
+            }
+            write(fp, s, num);
+        }
     }
     pipes -= count;
     int status;
@@ -184,12 +204,14 @@ int run_commands(Command *commands, char **str) {
 }
 struct CommandReturn {
     Command *command;
+    char *file;
     int length;
 };
-enum State { NONE, SINGLEQUOTE, DOUBLEQUOTE, ESCAPE, SPECIAL, COMMAND };
+enum State { NONE, SINGLEQUOTE, DOUBLEQUOTE, ESCAPE, SPECIAL, COMMAND, FILEO };
 struct CommandReturn get_commands(char *line, char is_command) {
     Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
     struct CommandReturn ret;
+    ret.file = NULL;
     ret.command = commands;
     ret.length = 0;
     if (commands == NULL) {
@@ -218,6 +240,9 @@ struct CommandReturn get_commands(char *line, char is_command) {
             switch (*line) {
             case '\\':
                 state = ESCAPE;
+                break;
+            case '>':
+                state = FILEO;
                 break;
             case '"':
                 state = DOUBLEQUOTE;
@@ -329,6 +354,17 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 return ret;
             }
             break;
+        case FILEO:
+            ret.file = malloc(strlen(line) + 1);
+            if (ret.file == NULL) {
+                perror("malloc");
+                free_commands(commands);
+                exit(1);
+            }
+            strcpy(ret.file, line);
+            line = "\0\0";
+            state = NONE;
+            break;
         case COMMAND:
             struct CommandReturn c = get_commands(line, 1);
             line += c.length;
@@ -339,7 +375,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
-            run_commands(c.command, &buf);
+            run_commands(c.command, &buf, NULL);
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
                     commands[i][j], ret.length + strlen(line) + strlen(buf));
@@ -404,13 +440,16 @@ int main() {
         if (strlen(line) != 0) {
             add_history(line);
         }
-        Command *commands = get_commands(line, 0).command;
+        struct CommandReturn commands = get_commands(line, 0);
         free(line);
-        if (commands == NULL) {
+        if (commands.command == NULL) {
             printf("ERROR\n");
         } else {
-            ret = run_commands(commands, NULL);
-            free_commands(commands);
+            ret = run_commands(commands.command, NULL, commands.file);
+            free_commands(commands.command);
+        }
+        if (commands.file != NULL) {
+            free(commands.file);
         }
     }
 }
