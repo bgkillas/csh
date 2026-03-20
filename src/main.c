@@ -9,6 +9,7 @@ char *get_current_dir_name();
 typedef char *Arg;
 typedef Arg *Command;
 int BUF_SIZE = 65535;
+volatile int SIG_INT = 0;
 void free_commands(Command *commands) {
     int i = 0;
     while (commands[i] != NULL) {
@@ -181,8 +182,19 @@ int run_commands(Command *commands, char **str, char *file) {
     pipes -= count;
     int status;
     if (waitpid(pid, &status, 0) == -1) {
-        perror("waitpid");
-        exit(1);
+        if (SIG_INT) {
+            if (kill(pid, 9) == -1) {
+                perror("kill");
+                exit(1);
+            }
+            if (waitpid(pid, &status, 0) == -1) {
+                perror("waitpid");
+                exit(1);
+            }
+        } else {
+            perror("waitpid");
+            exit(1);
+        }
     }
     for (int i = 1; i < count; i++) {
         if (wait(0) == -1) {
@@ -197,10 +209,15 @@ int run_commands(Command *commands, char **str, char *file) {
         }
     }
     free(pipes);
-    if (!WIFEXITED(status)) {
-        return 1;
+    if (SIG_INT) {
+        SIG_INT = 0;
+        return 130;
+    } else {
+        if (!WIFEXITED(status)) {
+            return 1;
+        }
+        return WEXITSTATUS(status);
     }
-    return WEXITSTATUS(status);
 }
 struct CommandReturn {
     Command *command;
@@ -415,7 +432,15 @@ struct CommandReturn get_commands(char *line, char is_command) {
     }
     return ret;
 }
+void handler(int signo, siginfo_t *info, void *context) { SIG_INT = 1; }
 int main() {
+    struct sigaction act = {0};
+    act.sa_flags = SA_SIGINFO;
+    act.sa_sigaction = &handler;
+    if (sigaction(SIGINT, &act, NULL) == -1) {
+        perror("sigaction");
+        exit(EXIT_FAILURE);
+    }
     int ret = 0;
     using_history();
     char *dir = get_current_dir_name();
