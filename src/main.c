@@ -102,8 +102,8 @@ int builtin(Command command) {
         return -1;
     }
 }
-int run_commands(Command *commands, char **str, char *file, char forget,
-                 char no_stdinout) {
+int run_commands(Command *commands, char **str, char *file, char *file_input,
+                 char forget, int last) {
     int count = cmdlen(commands);
     if (count == 0) {
         return 0;
@@ -119,9 +119,13 @@ int run_commands(Command *commands, char **str, char *file, char forget,
         perror("malloc");
         exit(1);
     }
-    int last = STDIN_FILENO;
-    if (no_stdinout) {
-        last = -1;
+    char no_stdinout = last == -1;
+    if (file_input != NULL) {
+        last = open(file_input, O_CREAT | O_RDONLY, 0644);
+        if (last == -1) {
+            perror("open");
+            exit(1);
+        }
     }
     int p[2];
     int pid = 0;
@@ -181,6 +185,10 @@ int run_commands(Command *commands, char **str, char *file, char forget,
     }
     if (file != NULL) {
         int fp = open(file, O_CREAT | O_WRONLY, 0644);
+        if (fp == -1) {
+            perror("open");
+            exit(1);
+        }
         char *s = malloc(BUF_SIZE);
         if (s == NULL) {
             perror("malloc");
@@ -195,7 +203,14 @@ int run_commands(Command *commands, char **str, char *file, char forget,
             if (num == 0) {
                 break;
             }
-            write(fp, s, num);
+            if (write(fp, s, num) == -1) {
+                perror("write");
+                exit(1);
+            }
+        }
+        if (close(fp) == -1) {
+            perror("close");
+            exit(1);
         }
     }
     if (forget) {
@@ -244,6 +259,7 @@ int run_commands(Command *commands, char **str, char *file, char forget,
 struct CommandReturn {
     Command *command;
     char *file;
+    char *file_input;
     char forget;
     int length;
 };
@@ -254,14 +270,16 @@ enum State {
     ESCAPE,
     SPECIAL,
     COMMAND,
-    SPECIALFILE,
     COMMANDFILE,
-    FILEO
+    COMMANDFILEINPUT,
+    FILEO,
+    FILEI
 };
 struct CommandReturn get_commands(char *line, char is_command) {
     Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
     struct CommandReturn ret;
     ret.file = NULL;
+    ret.file_input = NULL;
     ret.forget = 0;
     ret.command = commands;
     ret.length = 0;
@@ -287,6 +305,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
     enum State state = NONE;
     char *buf;
     struct CommandReturn c;
+    char str[32];
     while (*line != '\0') {
         switch (state) {
         case NONE:
@@ -311,7 +330,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 state = SPECIAL;
                 break;
             case '<':
-                state = SPECIALFILE;
+                state = FILEI;
                 break;
             case '|':
                 commands[i][j][k] = '\0';
@@ -414,25 +433,35 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 return ret;
             }
             break;
-        case SPECIALFILE:
+        case FILEI:
             if (*line == '(') {
-                state = COMMANDFILE;
+                state = COMMANDFILEINPUT;
             } else {
-                free_commands(commands);
-                ret.command = NULL;
-                return ret;
+                ret.file_input = malloc(strlen(line) + 1);
+                if (ret.file_input == NULL) {
+                    perror("malloc");
+                    free_commands(commands);
+                    exit(1);
+                }
+                strcpy(ret.file_input, line);
+                line = "\0\0";
+                state = NONE;
             }
             break;
         case FILEO:
-            ret.file = malloc(strlen(line) + 1);
-            if (ret.file == NULL) {
-                perror("malloc");
-                free_commands(commands);
-                exit(1);
+            if (*line == '(') {
+                state = COMMANDFILE;
+            } else {
+                ret.file = malloc(strlen(line) + 1);
+                if (ret.file == NULL) {
+                    perror("malloc");
+                    free_commands(commands);
+                    exit(1);
+                }
+                strcpy(ret.file, line);
+                line = "\0\0";
+                state = NONE;
             }
-            strcpy(ret.file, line);
-            line = "\0\0";
-            state = NONE;
             break;
         case COMMAND:
             c = get_commands(line, 1);
@@ -444,7 +473,35 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
-            run_commands(c.command, &buf, NULL, 0, 0);
+            run_commands(c.command, &buf, NULL, NULL, 0, STDIN_FILENO);
+            if (strlen(buf) >= c.length) {
+                commands[i][j] = realloc(
+                    commands[i][j], ret.length + strlen(line) + strlen(buf));
+                if (commands[i][j] == 0) {
+                    perror("realloc");
+                    exit(1);
+                }
+            }
+            commands[i][j][k] = '\0';
+            strcat(commands[i][j], buf);
+            k += strlen(buf);
+            free(buf);
+            free_commands(c.command);
+            break;
+        case COMMANDFILEINPUT:
+            c = get_commands(line, 1);
+            line += c.length;
+            state = NONE;
+            buf = malloc(32);
+            if (buf == NULL) {
+                perror("malloc");
+                exit(1);
+            }
+            *buf = '\0';
+            int pipeo = run_commands(c.command, NULL, NULL, NULL, 1, -1);
+            strcat(buf, "/dev/fd/");
+            sprintf(str, "%d", pipeo);
+            strcat(buf, str);
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
                     commands[i][j], ret.length + strlen(line) + strlen(buf));
@@ -469,10 +526,14 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
-            int pipe = run_commands(c.command, NULL, NULL, 1, 1);
+            int p[2];
+            if (pipe(p) == -1) {
+                perror("pipe");
+                exit(1);
+            }
+            run_commands(c.command, NULL, NULL, NULL, 1, p[0]);
             strcat(buf, "/dev/fd/");
-            char str[32];
-            sprintf(str, "%d", pipe);
+            sprintf(str, "%d", p[1]);
             strcat(buf, str);
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
@@ -552,7 +613,8 @@ int main() {
             printf("ERROR\n");
         } else {
             ret = run_commands(commands.command, NULL, commands.file,
-                               commands.forget, 0);
+                               commands.file_input, commands.forget,
+                               STDIN_FILENO);
             if (commands.forget) {
                 ret = 0;
             }
