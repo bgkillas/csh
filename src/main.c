@@ -24,11 +24,25 @@ void free_commands(Command *commands) {
     free(commands);
 }
 void run_command(Command command, int input, int output) {
-    if ((input != STDIN_FILENO &&
-         (dup2(input, STDIN_FILENO) == -1 || close(input) == -1)) ||
-        (output != STDOUT_FILENO &&
-         (dup2(output, STDOUT_FILENO) == -1 || close(output) == -1))) {
-        exit(1);
+    if (input != -1 && input != STDIN_FILENO) {
+        if (dup2(input, STDIN_FILENO) == -1) {
+            perror("dup2");
+            exit(1);
+        }
+        if (close(input) == -1) {
+            perror("close");
+            exit(1);
+        }
+    }
+    if (output != STDOUT_FILENO) {
+        if (dup2(output, STDOUT_FILENO) == -1) {
+            perror("dup2");
+            exit(1);
+        }
+        if (close(output) == -1) {
+            perror("close");
+            exit(1);
+        }
     }
     execvp(*command, command);
     perror("execvp");
@@ -88,7 +102,8 @@ int builtin(Command command) {
         return -1;
     }
 }
-int run_commands(Command *commands, char **str, char *file, char forget) {
+int run_commands(Command *commands, char **str, char *file, char forget,
+                 char no_stdinout) {
     int count = cmdlen(commands);
     if (count == 0) {
         return 0;
@@ -105,6 +120,9 @@ int run_commands(Command *commands, char **str, char *file, char forget) {
         exit(1);
     }
     int last = STDIN_FILENO;
+    if (no_stdinout) {
+        last = -1;
+    }
     int p[2];
     int pid = 0;
     while (*commands != NULL) {
@@ -123,7 +141,8 @@ int run_commands(Command *commands, char **str, char *file, char forget) {
                 perror("close");
                 exit(1);
             }
-            if (commands[1] == NULL && str == NULL && file == NULL) {
+            if (commands[1] == NULL && str == NULL && file == NULL &&
+                !no_stdinout) {
                 p[1] = STDOUT_FILENO;
             }
             run_command(*commands, last, p[1]);
@@ -180,7 +199,7 @@ int run_commands(Command *commands, char **str, char *file, char forget) {
         }
     }
     if (forget) {
-        return 0;
+        return last;
     }
     pipes -= count;
     int status;
@@ -228,7 +247,17 @@ struct CommandReturn {
     char forget;
     int length;
 };
-enum State { NONE, SINGLEQUOTE, DOUBLEQUOTE, ESCAPE, SPECIAL, COMMAND, FILEO };
+enum State {
+    NONE,
+    SINGLEQUOTE,
+    DOUBLEQUOTE,
+    ESCAPE,
+    SPECIAL,
+    COMMAND,
+    SPECIALFILE,
+    COMMANDFILE,
+    FILEO
+};
 struct CommandReturn get_commands(char *line, char is_command) {
     Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
     struct CommandReturn ret;
@@ -256,6 +285,8 @@ struct CommandReturn get_commands(char *line, char is_command) {
     int k = 0;
     int last = '\0';
     enum State state = NONE;
+    char *buf;
+    struct CommandReturn c;
     while (*line != '\0') {
         switch (state) {
         case NONE:
@@ -278,6 +309,9 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 break;
             case '$':
                 state = SPECIAL;
+                break;
+            case '<':
+                state = SPECIALFILE;
                 break;
             case '|':
                 commands[i][j][k] = '\0';
@@ -380,6 +414,15 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 return ret;
             }
             break;
+        case SPECIALFILE:
+            if (*line == '(') {
+                state = COMMANDFILE;
+            } else {
+                free_commands(commands);
+                ret.command = NULL;
+                return ret;
+            }
+            break;
         case FILEO:
             ret.file = malloc(strlen(line) + 1);
             if (ret.file == NULL) {
@@ -392,16 +435,45 @@ struct CommandReturn get_commands(char *line, char is_command) {
             state = NONE;
             break;
         case COMMAND:
-            struct CommandReturn c = get_commands(line, 1);
+            c = get_commands(line, 1);
             line += c.length;
             state = NONE;
-            char *buf = malloc(BUF_SIZE);
+            buf = malloc(BUF_SIZE);
             if (buf == NULL) {
                 perror("malloc");
                 exit(1);
             }
             *buf = '\0';
-            run_commands(c.command, &buf, NULL, 0);
+            run_commands(c.command, &buf, NULL, 0, 0);
+            if (strlen(buf) >= c.length) {
+                commands[i][j] = realloc(
+                    commands[i][j], ret.length + strlen(line) + strlen(buf));
+                if (commands[i][j] == 0) {
+                    perror("realloc");
+                    exit(1);
+                }
+            }
+            commands[i][j][k] = '\0';
+            strcat(commands[i][j], buf);
+            k += strlen(buf);
+            free(buf);
+            free_commands(c.command);
+            break;
+        case COMMANDFILE:
+            c = get_commands(line, 1);
+            line += c.length;
+            state = NONE;
+            buf = malloc(32);
+            if (buf == NULL) {
+                perror("malloc");
+                exit(1);
+            }
+            *buf = '\0';
+            int pipe = run_commands(c.command, NULL, NULL, 1, 1);
+            strcat(buf, "/dev/fd/");
+            char str[32];
+            sprintf(str, "%d", pipe);
+            strcat(buf, str);
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
                     commands[i][j], ret.length + strlen(line) + strlen(buf));
@@ -480,7 +552,10 @@ int main() {
             printf("ERROR\n");
         } else {
             ret = run_commands(commands.command, NULL, commands.file,
-                               commands.forget);
+                               commands.forget, 0);
+            if (commands.forget) {
+                ret = 0;
+            }
             free_commands(commands.command);
         }
         if (commands.file != NULL) {
