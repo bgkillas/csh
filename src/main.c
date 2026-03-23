@@ -440,10 +440,14 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 int n = 0;
                 char escape = 0;
                 while (line[n] != '\0') {
-                    if (line[n] == '\\') {
-                        escape = 1;
-                    } else if (!escape && line[n] == '>') {
-                        break;
+                    if (!escape) {
+                        if (line[n] == '\\') {
+                            escape = 1;
+                        } else if (line[n] == '>') {
+                            break;
+                        }
+                    } else {
+                        escape = 0;
                     }
                     n += 1;
                 }
@@ -466,10 +470,14 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 int n = 0;
                 char escape = 0;
                 while (line[n] != '\0') {
-                    if (line[n] == '\\') {
-                        escape = 1;
-                    } else if (!escape && line[n] == '<') {
-                        break;
+                    if (!escape) {
+                        if (line[n] == '\\') {
+                            escape = 1;
+                        } else if (line[n] == '<') {
+                            break;
+                        }
+                    } else {
+                        escape = 0;
                     }
                     n += 1;
                 }
