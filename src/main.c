@@ -276,6 +276,7 @@ struct CommandReturn {
     char *file;
     char *file_input;
     char forget;
+    int *close_pipes;
     int length;
 };
 enum State {
@@ -292,16 +293,22 @@ enum State {
 };
 struct CommandReturn get_commands(char *line, char is_command) {
     Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
+    if (commands == NULL) {
+        perror("malloc");
+        exit(1);
+    }
     struct CommandReturn ret;
     ret.file = NULL;
     ret.file_input = NULL;
     ret.forget = 0;
     ret.command = commands;
     ret.length = 0;
-    if (commands == NULL) {
+    ret.close_pipes = malloc(sizeof(int) * strlen(line));
+    if (ret.close_pipes == NULL) {
         perror("malloc");
         exit(1);
     }
+    ret.close_pipes[0] = -1;
     int i = 0;
     commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
     if (commands[i] == NULL) {
@@ -580,10 +587,13 @@ struct CommandReturn get_commands(char *line, char is_command) {
             strcat(buf, "/dev/fd/");
             sprintf(str, "%d", p[1]);
             strcat(buf, str);
-            *hanged_pipes_end = p[0];
-            hanged_pipes_end++;
-            *hanged_pipes_end = p[1];
-            hanged_pipes_end++;
+            int *close_pipes = ret.close_pipes;
+            while (*close_pipes != -1) {
+                close_pipes++;
+            }
+            *close_pipes = p[0];
+            *(close_pipes + 1) = p[1];
+            *(close_pipes + 2) = -1;
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
                     commands[i][j], ret.length + strlen(line) + strlen(buf));
@@ -687,6 +697,15 @@ int main() {
                                STDIN_FILENO);
             if (commands.forget) {
                 ret = 0;
+            } else {
+                int *close_pipes = commands.close_pipes;
+                while (*close_pipes != -1) {
+                    if (close(*close_pipes) == -1) {
+                        perror("close");
+                        exit(1);
+                    }
+                    close_pipes++;
+                }
             }
             free_commands(commands.command);
         }
@@ -696,5 +715,6 @@ int main() {
         if (commands.file_input != NULL) {
             free(commands.file_input);
         }
+        free(commands.close_pipes);
     }
 }
