@@ -437,14 +437,25 @@ struct CommandReturn get_commands(char *line, char is_command) {
             if (*line == '(') {
                 state = COMMANDFILEINPUT;
             } else {
-                ret.file_input = malloc(strlen(line) + 1);
+                int n = 0;
+                char escape = 0;
+                while (line[n] != '\0') {
+                    if (line[n] == '\\') {
+                        escape = 1;
+                    } else if (!escape && line[n] == '>') {
+                        break;
+                    }
+                    n += 1;
+                }
+                ret.file_input = malloc(n + 1);
                 if (ret.file_input == NULL) {
                     perror("malloc");
                     free_commands(commands);
                     exit(1);
                 }
-                strcpy(ret.file_input, line);
-                line = "\0\0";
+                strncpy(ret.file_input, line, n);
+                ret.file_input[n] = '\0';
+                line += n - 1;
                 state = NONE;
             }
             break;
@@ -452,14 +463,25 @@ struct CommandReturn get_commands(char *line, char is_command) {
             if (*line == '(') {
                 state = COMMANDFILE;
             } else {
-                ret.file = malloc(strlen(line) + 1);
+                int n = 0;
+                char escape = 0;
+                while (line[n] != '\0') {
+                    if (line[n] == '\\') {
+                        escape = 1;
+                    } else if (!escape && line[n] == '<') {
+                        break;
+                    }
+                    n += 1;
+                }
+                ret.file = malloc(n + 1);
                 if (ret.file == NULL) {
                     perror("malloc");
                     free_commands(commands);
                     exit(1);
                 }
-                strcpy(ret.file, line);
-                line = "\0\0";
+                strncpy(ret.file, line, n);
+                ret.file[n] = '\0';
+                line += n - 1;
                 state = NONE;
             }
             break;
