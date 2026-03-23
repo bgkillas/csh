@@ -10,6 +10,10 @@ typedef char *Arg;
 typedef Arg *Command;
 int BUF_SIZE = 65535;
 volatile int SIG_INT = 0;
+int hanged_pids[65535];
+int hanged_pipes[65535];
+int *hanged_pids_end = hanged_pids;
+int *hanged_pipes_end = hanged_pipes;
 void free_commands(Command *commands) {
     int i = 0;
     while (commands[i] != NULL) {
@@ -126,6 +130,8 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             perror("open");
             exit(1);
         }
+        *hanged_pids_end = last;
+        hanged_pipes_end++;
     }
     int p[2];
     int pid = 0;
@@ -156,13 +162,17 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             exit(1);
         }
         last = p[0];
+        *hanged_pids_end = pid;
+        *hanged_pipes_end = last;
+        hanged_pids_end++;
+        hanged_pipes_end++;
         commands++;
         pipes++;
     }
     if (str != NULL) {
         int size = 0;
         int cap = BUF_SIZE;
-        while (true) {
+        while (1) {
             int num = read(last, *str + size, BUF_SIZE);
             if (num == -1) {
                 perror("read");
@@ -194,7 +204,7 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             perror("malloc");
             exit(1);
         }
-        while (true) {
+        while (1) {
             int num = read(last, s, BUF_SIZE);
             if (num == -1) {
                 perror("read");
@@ -212,11 +222,13 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             perror("close");
             exit(1);
         }
-    }
-    if (forget) {
-        return last;
+        free(s);
     }
     pipes -= count;
+    if (forget) {
+        free(pipes);
+        return last;
+    }
     int status;
     if (waitpid(pid, &status, 0) == -1) {
         if (SIG_INT) {
@@ -233,17 +245,20 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             exit(1);
         }
     }
+    hanged_pids_end--;
     for (int i = 1; i < count; i++) {
         if (wait(0) == -1) {
             perror("wait");
             exit(1);
         }
+        hanged_pids_end--;
     }
     for (int i = 0; i < count; i++) {
         if (close(pipes[i]) == -1) {
             perror("close");
             exit(1);
         }
+        hanged_pipes_end--;
     }
     free(pipes);
     if (SIG_INT) {
@@ -565,6 +580,10 @@ struct CommandReturn get_commands(char *line, char is_command) {
             strcat(buf, "/dev/fd/");
             sprintf(str, "%d", p[1]);
             strcat(buf, str);
+            *hanged_pipes_end = p[0];
+            hanged_pipes_end++;
+            *hanged_pipes_end = p[1];
+            hanged_pipes_end++;
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
                     commands[i][j], ret.length + strlen(line) + strlen(buf));
@@ -604,6 +623,26 @@ struct CommandReturn get_commands(char *line, char is_command) {
     }
     return ret;
 }
+void handle_hanged() {
+    for (int *p = hanged_pids; p < hanged_pids_end; p++) {
+        int status;
+        if (waitpid(*p, &status, WNOHANG) == -1) {
+            perror("waitpid");
+            exit(1);
+        }
+        if (!WIFEXITED(status)) {
+            return;
+        }
+    }
+    hanged_pids_end = hanged_pids;
+    for (int *p = hanged_pipes; p < hanged_pipes_end; p++) {
+        if (close(*p) == -1) {
+            perror("close");
+            exit(1);
+        }
+    }
+    hanged_pipes_end = hanged_pipes;
+}
 void handler(int signo, siginfo_t *info, void *context) { SIG_INT = 1; }
 int main() {
     struct sigaction act = {0};
@@ -622,7 +661,7 @@ int main() {
         return 1;
     }
     strcpy(CURRENT_DIR, dir);
-    while (true) {
+    while (1) {
         int size = snprintf(NULL, 0, "%s %d ", CURRENT_DIR, ret) + 1;
         char *prompt = malloc(size);
         if (prompt == NULL) {
@@ -631,6 +670,7 @@ int main() {
         snprintf(prompt, size, "%s %d ", CURRENT_DIR, ret);
         char *line = readline(prompt);
         free(prompt);
+        handle_hanged();
         if (line == NULL) {
             return 1;
         }
@@ -652,6 +692,9 @@ int main() {
         }
         if (commands.file != NULL) {
             free(commands.file);
+        }
+        if (commands.file_input != NULL) {
+            free(commands.file_input);
         }
     }
 }
