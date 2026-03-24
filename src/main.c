@@ -171,8 +171,7 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
     int p[2];
     int pid = 0;
     while (*commands != NULL) {
-        char use_stdout =
-            commands[1] == NULL && str == NULL && file == NULL && !no_stdinout;
+        char use_stdout = commands[1] == NULL && str == NULL && !no_stdinout;
         if (!use_stdout && pipe(p) == -1) {
             perror("pipe");
             exit(1);
@@ -191,7 +190,15 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
                 to_close = -1;
             }
             if (use_stdout) {
-                p[1] = STDOUT_FILENO;
+                if (file != NULL) {
+                    p[1] = open(file, O_CREAT | O_WRONLY, 0644);
+                    if (p[1] == -1) {
+                        perror("open");
+                        exit(1);
+                    }
+                } else {
+                    p[1] = STDOUT_FILENO;
+                }
             } else {
                 if (close(p[0]) == -1) {
                     perror("close");
@@ -223,6 +230,7 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
     pipes -= count;
     pids -= count;
     if (str != NULL) {
+        forget = 0;
         int size = 0;
         int cap = BUF_SIZE;
         while (1) {
@@ -245,37 +253,6 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             }
         }
         (*str)[size] = '\0';
-    }
-    if (file != NULL) {
-        int fp = open(file, O_CREAT | O_WRONLY, 0644);
-        if (fp == -1) {
-            perror("open");
-            exit(1);
-        }
-        char *s = malloc(BUF_SIZE);
-        if (s == NULL) {
-            perror("malloc");
-            exit(1);
-        }
-        while (1) {
-            int num = read(last, s, BUF_SIZE);
-            if (num == -1) {
-                perror("read");
-                exit(1);
-            }
-            if (num == 0) {
-                break;
-            }
-            if (write(fp, s, num) == -1) {
-                perror("write");
-                exit(1);
-            }
-        }
-        if (close(fp) == -1) {
-            perror("close");
-            exit(1);
-        }
-        free(s);
     }
     if (forget) {
         free(pipes);
