@@ -28,6 +28,7 @@ void free_commands(Command *commands) {
     free(commands);
 }
 void run_command(Command command, int input, int output) {
+    // TODO -1 should mean empty file
     if (input != -1 && input != STDIN_FILENO) {
         if (dup2(input, STDIN_FILENO) == -1) {
             perror("dup2");
@@ -107,7 +108,7 @@ int builtin(Command command) {
     }
 }
 int run_commands(Command *commands, char **str, char *file, char *file_input,
-                 char forget, int last) {
+                 char forget, int last, int to_close) {
     int count = cmdlen(commands);
     if (count == 0) {
         return 0;
@@ -147,6 +148,13 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             exit(1);
         }
         if (pid == 0) {
+            if (to_close != -1) {
+                if (close(to_close) == -1) {
+                    perror("close");
+                    exit(1);
+                }
+                to_close = -1;
+            }
             if (close(p[0]) == -1) {
                 perror("close");
                 exit(1);
@@ -525,7 +533,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
-            run_commands(c.command, &buf, NULL, NULL, 0, STDIN_FILENO);
+            run_commands(c.command, &buf, NULL, NULL, 0, STDIN_FILENO, -1);
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
                     commands[i][j], ret.length + strlen(line) + strlen(buf));
@@ -550,7 +558,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
-            int pipeo = run_commands(c.command, NULL, NULL, NULL, 1, -1);
+            int pipeo = run_commands(c.command, NULL, NULL, NULL, 1, -1, -1);
             strcat(buf, "/dev/fd/");
             sprintf(str, "%d", pipeo);
             strcat(buf, str);
@@ -583,7 +591,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 perror("pipe");
                 exit(1);
             }
-            run_commands(c.command, NULL, NULL, NULL, 1, p[0]);
+            run_commands(c.command, NULL, NULL, NULL, 1, p[0], p[1]);
             strcat(buf, "/dev/fd/");
             sprintf(str, "%d", p[1]);
             strcat(buf, str);
@@ -694,7 +702,7 @@ int main() {
         } else {
             ret = run_commands(commands.command, NULL, commands.file,
                                commands.file_input, commands.forget,
-                               STDIN_FILENO);
+                               STDIN_FILENO, -1);
             if (commands.forget) {
                 ret = 0;
             } else {
