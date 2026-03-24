@@ -16,6 +16,12 @@ int *hanged_pids_end = hanged_pids;
 int *hanged_pipes_end = hanged_pipes;
 int *close_pipes_on_pid[65535];
 int **close_pipes_on_pid_end = close_pipes_on_pid;
+struct PidClosePipes {
+    int pid;
+    int *pipes;
+};
+// struct PidClosePipes hanged_pids[65535];
+// struct PidClosePipes *hanged_pids_end = hanged_pids;
 void free_commands(Command *commands) {
     int i = 0;
     while (commands[i] != NULL) {
@@ -260,31 +266,27 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
         return 0;
     }
     int status;
-    if (waitpid(pid, &status, 0) == -1) {
-        if (SIG_INT) {
-            if (kill(pid, 9) == -1) {
-                perror("kill");
-                exit(1);
-            }
-            if (waitpid(pid, &status, 0) == -1) {
+    for (int i = 0; i < count; i++) {
+        if (SIG_INT && kill(pids[i], 9) == -1) {
+            perror("kill");
+            exit(1);
+        }
+        if (waitpid(pids[i], &status, 0) == -1) {
+            if (SIG_INT) {
+                if (kill(pids[i], 9) == -1) {
+                    perror("kill");
+                    exit(1);
+                }
+                if (waitpid(pids[i], &status, 0) == -1) {
+                    perror("waitpid");
+                    exit(1);
+                }
+            } else {
                 perror("waitpid");
                 exit(1);
             }
-        } else {
-            perror("waitpid");
-            exit(1);
-        }
-    }
-    hanged_pids_end--;
-    for (int i = 0; i < count - 1; i++) {
-        if (waitpid(pids[i], NULL, 0) == -1) {
-            perror("wait");
-            exit(1);
         }
         hanged_pids_end--;
-    }
-    free(pids);
-    for (int i = 0; i < count; i++) {
         if (pipes[i] != -1) {
             if (close(pipes[i]) == -1) {
                 perror("close");
@@ -293,6 +295,7 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             hanged_pipes_end--;
         }
     }
+    free(pids);
     free(pipes);
     if (SIG_INT) {
         SIG_INT = 0;
