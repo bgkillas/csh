@@ -125,7 +125,7 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             perror("open");
             exit(1);
         }
-        *hanged_pids_end = last;
+        *hanged_pipes_end = last;
         hanged_pipes_end++;
     }
     int p[2];
@@ -695,7 +695,6 @@ int main() {
         snprintf(prompt, size, "%s %d ", CURRENT_DIR, ret);
         char *line = readline(prompt);
         free(prompt);
-        handle_hanged();
         if (line == NULL) {
             return 0;
         }
@@ -731,5 +730,6 @@ int main() {
             free(commands.file_input);
         }
         free(commands.close_pipes);
+        handle_hanged();
     }
 }
