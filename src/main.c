@@ -28,7 +28,6 @@ void free_commands(Command *commands) {
     free(commands);
 }
 void run_command(Command command, int input, int output) {
-    // TODO -1 should mean empty file
     if (input != -1 && input != STDIN_FILENO) {
         if (dup2(input, STDIN_FILENO) == -1) {
             perror("dup2");
@@ -60,9 +59,31 @@ int cmdlen(Command *commands) {
     }
     return i;
 }
+void handle_hanged() {
+    for (int *p = hanged_pids_end - 1; p >= hanged_pids; p--) {
+        int status;
+        if (waitpid(*p, &status, WNOHANG) == -1) {
+            perror("waitpid");
+            exit(1);
+        }
+        if (!WIFEXITED(status)) {
+            return;
+        }
+        hanged_pids_end--;
+    }
+    hanged_pids_end = hanged_pids;
+    for (int *p = hanged_pipes; p < hanged_pipes_end; p++) {
+        if (close(*p) == -1) {
+            perror("close");
+            exit(1);
+        }
+    }
+    hanged_pipes_end = hanged_pipes;
+}
 char *CURRENT_DIR;
 int builtin(Command command) {
     if (strcmp(*command, "exit") == 0) {
+        handle_hanged();
         if (command[1] != NULL) {
             exit(strtol(command[1], NULL, 10));
         } else {
@@ -115,6 +136,11 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
     }
     int *pipes = malloc(sizeof(int) * count);
     if (pipes == 0) {
+        perror("malloc");
+        exit(1);
+    }
+    int *pids = malloc(sizeof(int) * count);
+    if (pids == 0) {
         perror("malloc");
         exit(1);
     }
@@ -174,10 +200,14 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             *pipes = -1;
             pipes++;
         }
+        *pids = pid;
+        pids++;
         *hanged_pids_end = pid;
         hanged_pids_end++;
         commands++;
     }
+    pipes -= count;
+    pids -= count;
     if (str != NULL) {
         int size = 0;
         int cap = BUF_SIZE;
@@ -233,9 +263,9 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
         }
         free(s);
     }
-    pipes -= count;
     if (forget) {
         free(pipes);
+        free(pids);
         return last;
     }
     int status;
@@ -255,13 +285,14 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
         }
     }
     hanged_pids_end--;
-    for (int i = 1; i < count; i++) {
-        if (wait(0) == -1) {
+    for (int i = 0; i < count - 1; i++) {
+        if (waitpid(pids[i], NULL, 0) == -1) {
             perror("wait");
             exit(1);
         }
         hanged_pids_end--;
     }
+    free(pids);
     for (int i = 0; i < count; i++) {
         if (pipes[i] != -1) {
             if (close(pipes[i]) == -1) {
@@ -646,26 +677,6 @@ struct CommandReturn get_commands(char *line, char is_command) {
         return ret;
     }
     return ret;
-}
-void handle_hanged() {
-    for (int *p = hanged_pids; p < hanged_pids_end; p++) {
-        int status;
-        if (waitpid(*p, &status, WNOHANG) == -1) {
-            perror("waitpid");
-            exit(1);
-        }
-        if (!WIFEXITED(status)) {
-            return;
-        }
-    }
-    hanged_pids_end = hanged_pids;
-    for (int *p = hanged_pipes; p < hanged_pipes_end; p++) {
-        if (close(*p) == -1) {
-            perror("close");
-            exit(1);
-        }
-    }
-    hanged_pipes_end = hanged_pipes;
 }
 void handler(int signo, siginfo_t *info, void *context) { SIG_INT = 1; }
 int main() {
