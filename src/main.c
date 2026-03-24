@@ -88,13 +88,6 @@ int builtin(Command command) {
         }
         strcpy(CURRENT_DIR, new_dir);
         return 0;
-    } else if (strcmp(*command, "sleep") == 0) {
-        if (command[1] != NULL) {
-            sleep(strtol(command[1], NULL, 10));
-            return 0;
-        } else {
-            return 1;
-        }
     } else if (strcmp(*command, "exec") == 0) {
         if (command[1] != NULL) {
             command++;
@@ -138,11 +131,12 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
     int p[2];
     int pid = 0;
     while (*commands != NULL) {
-        if (pipe(p) == -1) {
+        char use_stdout =
+            commands[1] == NULL && str == NULL && file == NULL && !no_stdinout;
+        if (!use_stdout && pipe(p) == -1) {
             perror("pipe");
             exit(1);
         }
-        *pipes = p[0];
         pid = fork();
         if (pid == -1) {
             perror("fork");
@@ -156,27 +150,33 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
                 }
                 to_close = -1;
             }
-            if (close(p[0]) == -1) {
-                perror("close");
-                exit(1);
-            }
-            if (commands[1] == NULL && str == NULL && file == NULL &&
-                !no_stdinout) {
+            if (use_stdout) {
                 p[1] = STDOUT_FILENO;
+            } else {
+                if (close(p[0]) == -1) {
+                    perror("close");
+                    exit(1);
+                }
             }
             run_command(*commands, last, p[1]);
         }
-        if (close(p[1]) == -1) {
-            perror("close");
-            exit(1);
+        if (!use_stdout) {
+            if (close(p[1]) == -1) {
+                perror("close");
+                exit(1);
+            }
+            last = p[0];
+            *hanged_pipes_end = last;
+            hanged_pipes_end++;
+            *pipes = p[0];
+            pipes++;
+        } else {
+            *pipes = -1;
+            pipes++;
         }
-        last = p[0];
         *hanged_pids_end = pid;
-        *hanged_pipes_end = last;
         hanged_pids_end++;
-        hanged_pipes_end++;
         commands++;
-        pipes++;
     }
     if (str != NULL) {
         int size = 0;
@@ -263,11 +263,13 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
         hanged_pids_end--;
     }
     for (int i = 0; i < count; i++) {
-        if (close(pipes[i]) == -1) {
-            perror("close");
-            exit(1);
+        if (pipes[i] != -1) {
+            if (close(pipes[i]) == -1) {
+                perror("close");
+                exit(1);
+            }
+            hanged_pipes_end--;
         }
-        hanged_pipes_end--;
     }
     free(pipes);
     if (SIG_INT) {
