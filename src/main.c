@@ -75,8 +75,10 @@ int builtin(Command command) {
         } else {
             new_dir = "/home";
         }
+        chdir(new_dir);
+        new_dir = get_current_dir_name();
         int len = strlen(new_dir);
-        if (strlen(CURRENT_DIR) > len) {
+        if (strlen(CURRENT_DIR) < len) {
             free(CURRENT_DIR);
             CURRENT_DIR = malloc(len + 1);
             if (CURRENT_DIR == NULL) {
@@ -85,7 +87,6 @@ int builtin(Command command) {
             }
         }
         strcpy(CURRENT_DIR, new_dir);
-        chdir(new_dir);
         return 0;
     } else if (strcmp(*command, "sleep") == 0) {
         if (command[1] != NULL) {
@@ -311,7 +312,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
     ret.forget = 0;
     ret.command = commands;
     ret.length = 0;
-    ret.close_pipes = malloc(sizeof(int) * strlen(line));
+    ret.close_pipes = malloc(sizeof(int) * (strlen(line) + 2));
     if (ret.close_pipes == NULL) {
         perror("malloc");
         exit(1);
@@ -599,9 +600,12 @@ struct CommandReturn get_commands(char *line, char is_command) {
             while (*close_pipes != -1) {
                 close_pipes++;
             }
-            *close_pipes = p[0];
-            *(close_pipes + 1) = p[1];
-            *(close_pipes + 2) = -1;
+            if (close(p[0]) == -1) {
+                perror("close");
+                exit(1);
+            }
+            *close_pipes = p[1];
+            *(close_pipes + 1) = -1;
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
                     commands[i][j], ret.length + strlen(line) + strlen(buf));
@@ -668,7 +672,7 @@ int main() {
     act.sa_sigaction = &handler;
     if (sigaction(SIGINT, &act, NULL) == -1) {
         perror("sigaction");
-        exit(EXIT_FAILURE);
+        return 1;
     }
     int ret = 0;
     using_history();
@@ -683,6 +687,7 @@ int main() {
         int size = snprintf(NULL, 0, "%s %d ", CURRENT_DIR, ret) + 1;
         char *prompt = malloc(size);
         if (prompt == NULL) {
+            perror("malloc");
             return 1;
         }
         snprintf(prompt, size, "%s %d ", CURRENT_DIR, ret);
@@ -690,7 +695,7 @@ int main() {
         free(prompt);
         handle_hanged();
         if (line == NULL) {
-            return 1;
+            return 0;
         }
         if (strlen(line) != 0) {
             add_history(line);
