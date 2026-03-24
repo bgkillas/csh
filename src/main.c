@@ -10,18 +10,14 @@ typedef char *Arg;
 typedef Arg *Command;
 int BUF_SIZE = 65535;
 volatile int SIG_INT = 0;
-int hanged_pids[65535];
-int hanged_pipes[65535];
-int *hanged_pids_end = hanged_pids;
-int *hanged_pipes_end = hanged_pipes;
 int *close_pipes_on_pid[65535];
 int **close_pipes_on_pid_end = close_pipes_on_pid;
-struct PidClosePipes {
+typedef struct PidClosePipes {
     int pid;
     int *pipes;
-};
-// struct PidClosePipes hanged_pids[65535];
-// struct PidClosePipes *hanged_pids_end = hanged_pids;
+} PidClosePipes;
+PidClosePipes hanged_pids[65535];
+PidClosePipes *hanged_pids_end = hanged_pids;
 void free_commands(Command *commands) {
     int i = 0;
     while (commands[i] != NULL) {
@@ -68,25 +64,42 @@ int cmdlen(Command *commands) {
     return i;
 }
 void handle_hanged() {
-    for (int *p = hanged_pids_end - 1; p >= hanged_pids; p--) {
-        int status;
-        if (waitpid(*p, &status, WNOHANG) == -1) {
-            perror("waitpid");
-            exit(1);
+    char do_exit = 0;
+    int status;
+    for (PidClosePipes *p = hanged_pids_end - 1; p >= hanged_pids; p--) {
+        if (p->pid != -1) {
+            if (waitpid(p->pid, &status, WNOHANG) == -1) {
+                perror("waitpid");
+                exit(1);
+            }
+            if (WIFEXITED(status)) {
+                if (do_exit) {
+                    p->pid = -1;
+                } else {
+                    hanged_pids_end--;
+                }
+                if (p->pipes != NULL) {
+                    int *close_pipes = p->pipes;
+                    while (*close_pipes != -1) {
+                        if (close(*close_pipes) == -1) {
+                            perror("close");
+                            exit(1);
+                        }
+                        close_pipes++;
+                    }
+                    free(p->pipes);
+                }
+            } else {
+                do_exit = 1;
+            }
+        } else if (!do_exit) {
+            hanged_pids_end--;
         }
-        if (!WIFEXITED(status)) {
-            return;
-        }
-        hanged_pids_end--;
+    }
+    if (do_exit) {
+        return;
     }
     hanged_pids_end = hanged_pids;
-    for (int *p = hanged_pipes; p < hanged_pipes_end; p++) {
-        if (close(*p) == -1) {
-            perror("close");
-            exit(1);
-        }
-    }
-    hanged_pipes_end = hanged_pipes;
     for (int **p = close_pipes_on_pid; p < close_pipes_on_pid_end; p++) {
         int *close_pipes = *p;
         while (*close_pipes != -1) {
@@ -154,25 +167,31 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             return ret;
         }
     }
-    int *pipes = malloc(sizeof(int) * count);
-    if (pipes == 0) {
-        perror("malloc");
-        exit(1);
-    }
-    int *pids = malloc(sizeof(int) * count);
-    if (pids == 0) {
-        perror("malloc");
-        exit(1);
+    int *pipes;
+    int *pids;
+    if (!forget) {
+        pipes = malloc(sizeof(int) * count);
+        if (pipes == 0) {
+            perror("malloc");
+            exit(1);
+        }
+        pids = malloc(sizeof(int) * count);
+        if (pids == 0) {
+            perror("malloc");
+            exit(1);
+        }
     }
     char no_stdinout = last == -1;
+    int file_pipe = -1;
     if (file_input != NULL) {
         last = open(file_input, O_CREAT | O_RDONLY, 0644);
         if (last == -1) {
             perror("open");
             exit(1);
         }
-        *hanged_pipes_end = last;
-        hanged_pipes_end++;
+        if (!forget) {
+            file_pipe = last;
+        }
     }
     int p[2];
     int pid = 0;
@@ -219,22 +238,44 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
                 exit(1);
             }
             last = p[0];
-            *hanged_pipes_end = last;
-            hanged_pipes_end++;
-            *pipes = p[0];
-            pipes++;
         } else {
-            *pipes = -1;
-            pipes++;
+            last = -1;
         }
-        *pids = pid;
-        pids++;
-        *hanged_pids_end = pid;
-        hanged_pids_end++;
+        if (forget) {
+            PidClosePipes pidpipes;
+            pidpipes.pid = pid;
+            pidpipes.pipes = malloc(3 * sizeof(int));
+            if (last == -1) {
+                if (file_pipe != -1) {
+                    pidpipes.pipes[0] = file_pipe;
+                    pidpipes.pipes[1] = -1;
+                } else {
+                    pidpipes.pipes[0] = -1;
+                }
+            } else {
+                if (file_pipe != -1) {
+                    pidpipes.pipes[0] = last;
+                    pidpipes.pipes[1] = file_pipe;
+                    pidpipes.pipes[2] = -1;
+                } else {
+                    pidpipes.pipes[0] = last;
+                    pidpipes.pipes[1] = -1;
+                }
+            }
+            *hanged_pids_end = pidpipes;
+            hanged_pids_end++;
+        } else {
+            *pipes = last;
+            pipes++;
+            *pids = pid;
+            pids++;
+        }
         commands++;
     }
-    pipes -= count;
-    pids -= count;
+    if (!forget) {
+        pipes -= count;
+        pids -= count;
+    }
     if (str != NULL) {
         forget = 0;
         int size = 0;
@@ -261,8 +302,6 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
         (*str)[size] = '\0';
     }
     if (forget) {
-        free(pipes);
-        free(pids);
         return 0;
     }
     int status;
@@ -286,13 +325,17 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
                 exit(1);
             }
         }
-        hanged_pids_end--;
+        if (i == 0 && file_pipe != -1) {
+            if (close(file_pipe) == -1) {
+                perror("close");
+                exit(1);
+            }
+        }
         if (pipes[i] != -1) {
             if (close(pipes[i]) == -1) {
                 perror("close");
                 exit(1);
             }
-            hanged_pipes_end--;
         }
     }
     free(pids);
@@ -307,14 +350,14 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
         return WEXITSTATUS(status);
     }
 }
-struct CommandReturn {
+typedef struct CommandReturn {
     Command *command;
     char *file;
     char *file_input;
     char forget;
     int *close_pipes;
     int length;
-};
+} CommandReturn;
 enum State {
     NONE,
     SINGLEQUOTE,
@@ -327,13 +370,13 @@ enum State {
     FILEO,
     FILEI
 };
-struct CommandReturn get_commands(char *line, char is_command) {
+CommandReturn get_commands(char *line, char is_command) {
     Command *commands = malloc(sizeof(Command *) * (strlen(line) / 2 + 2));
     if (commands == NULL) {
         perror("malloc");
         exit(1);
     }
-    struct CommandReturn ret;
+    CommandReturn ret;
     ret.file = NULL;
     ret.file_input = NULL;
     ret.forget = 0;
@@ -362,7 +405,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
     int last = '\0';
     enum State state = NONE;
     char *buf;
-    struct CommandReturn c;
+    CommandReturn c;
     char str[32];
     while (*line != '\0') {
         switch (state) {
@@ -587,7 +630,8 @@ struct CommandReturn get_commands(char *line, char is_command) {
             }
             *buf = '\0';
             run_commands(c.command, NULL, NULL, NULL, 1, -1, -1);
-            int pipeo = *(hanged_pipes_end - 1);
+            PidClosePipes pipes = *(hanged_pids_end - 1);
+            int pipeo = pipes.pipes[0];
             strcat(buf, "/dev/fd/");
             sprintf(str, "%d", pipeo);
             strcat(buf, str);
@@ -707,7 +751,7 @@ int main() {
         if (strlen(line) != 0) {
             add_history(line);
         }
-        struct CommandReturn commands = get_commands(line, 0);
+        CommandReturn commands = get_commands(line, 0);
         free(line);
         if (commands.command == NULL) {
             printf("ERROR\n");
