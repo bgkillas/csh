@@ -14,6 +14,8 @@ int hanged_pids[65535];
 int hanged_pipes[65535];
 int *hanged_pids_end = hanged_pids;
 int *hanged_pipes_end = hanged_pipes;
+int *close_pipes_on_pid[65535];
+int **close_pipes_on_pid_end = close_pipes_on_pid;
 void free_commands(Command *commands) {
     int i = 0;
     while (commands[i] != NULL) {
@@ -79,6 +81,18 @@ void handle_hanged() {
         }
     }
     hanged_pipes_end = hanged_pipes;
+    for (int **p = close_pipes_on_pid; p < close_pipes_on_pid_end; p++) {
+        int *close_pipes = *p;
+        while (*close_pipes != -1) {
+            if (close(*close_pipes) == -1) {
+                perror("close");
+                exit(1);
+            }
+            close_pipes++;
+        }
+        free(*p);
+    }
+    close_pipes_on_pid_end = close_pipes_on_pid;
 }
 char *CURRENT_DIR;
 int builtin(Command command) {
@@ -266,7 +280,7 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
     if (forget) {
         free(pipes);
         free(pids);
-        return last;
+        return 0;
     }
     int status;
     if (waitpid(pid, &status, 0) == -1) {
@@ -507,7 +521,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
                     if (!escape) {
                         if (line[n] == '\\') {
                             escape = 1;
-                        } else if (line[n] == '>') {
+                        } else if (line[n] == '>' || line[n] == '&') {
                             break;
                         }
                     } else {
@@ -537,7 +551,7 @@ struct CommandReturn get_commands(char *line, char is_command) {
                     if (!escape) {
                         if (line[n] == '\\') {
                             escape = 1;
-                        } else if (line[n] == '<') {
+                        } else if (line[n] == '<' || line[n] == '&') {
                             break;
                         }
                     } else {
@@ -592,7 +606,8 @@ struct CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
-            int pipeo = run_commands(c.command, NULL, NULL, NULL, 1, -1, -1);
+            run_commands(c.command, NULL, NULL, NULL, 1, -1, -1);
+            int pipeo = *(hanged_pipes_end - 1);
             strcat(buf, "/dev/fd/");
             sprintf(str, "%d", pipeo);
             strcat(buf, str);
@@ -721,7 +736,8 @@ int main() {
                                commands.file_input, commands.forget,
                                STDIN_FILENO, -1);
             if (commands.forget) {
-                ret = 0;
+                *close_pipes_on_pid_end = commands.close_pipes;
+                close_pipes_on_pid_end++;
             } else {
                 int *close_pipes = commands.close_pipes;
                 while (*close_pipes != -1) {
@@ -731,6 +747,7 @@ int main() {
                     }
                     close_pipes++;
                 }
+                free(commands.close_pipes);
             }
             free_commands(commands.command);
         }
@@ -740,7 +757,6 @@ int main() {
         if (commands.file_input != NULL) {
             free(commands.file_input);
         }
-        free(commands.close_pipes);
         handle_hanged();
     }
 }
