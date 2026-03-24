@@ -8,16 +8,22 @@
 char *get_current_dir_name();
 typedef char *Arg;
 typedef Arg *Command;
-int BUF_SIZE = 65535;
+int BUF_SIZE = 65536;
 volatile int SIG_INT = 0;
-int *close_pipes_on_pid[65535];
-int **close_pipes_on_pid_end = close_pipes_on_pid;
 typedef struct PidClosePipes {
     int pid;
     int *pipes;
 } PidClosePipes;
-PidClosePipes hanged_pids[65535];
+PidClosePipes hanged_pids[65536];
 PidClosePipes *hanged_pids_end = hanged_pids;
+typedef struct CommandReturn {
+    Command *command;
+    char *file;
+    char *file_input;
+    char forget;
+    int *close_pipes;
+    int length;
+} CommandReturn;
 void free_commands(Command *commands) {
     int i = 0;
     while (commands[i] != NULL) {
@@ -30,6 +36,18 @@ void free_commands(Command *commands) {
         i++;
     }
     free(commands);
+}
+void free_commands_ret(CommandReturn commands) {
+    if (commands.command != NULL) {
+        free_commands(commands.command);
+    }
+    if (commands.file != NULL) {
+        free(commands.file);
+    }
+    if (commands.file_input != NULL) {
+        free(commands.file_input);
+    }
+    free(commands.close_pipes);
 }
 void run_command(Command command, int input, int output) {
     if (input != -1 && input != STDIN_FILENO) {
@@ -96,22 +114,9 @@ void handle_hanged() {
             hanged_pids_end--;
         }
     }
-    if (do_exit) {
-        return;
+    if (!do_exit) {
+        hanged_pids_end = hanged_pids;
     }
-    hanged_pids_end = hanged_pids;
-    for (int **p = close_pipes_on_pid; p < close_pipes_on_pid_end; p++) {
-        int *close_pipes = *p;
-        while (*close_pipes != -1) {
-            if (close(*close_pipes) == -1) {
-                perror("close");
-                exit(1);
-            }
-            close_pipes++;
-        }
-        free(*p);
-    }
-    close_pipes_on_pid_end = close_pipes_on_pid;
 }
 char *CURRENT_DIR;
 int builtin(Command command) {
@@ -155,8 +160,16 @@ int builtin(Command command) {
         return -1;
     }
 }
-int run_commands(Command *commands, char **str, char *file, char *file_input,
-                 char forget, int last, int to_close) {
+int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
+    Command *commands = commandret.command;
+    if (commands == NULL) {
+        printf("ERROR\n");
+        return 1;
+    }
+    char *file = commandret.file;
+    char *file_input = commandret.file_input;
+    int *close_pipes = commandret.close_pipes;
+    char forget = commandret.forget;
     int count = cmdlen(commands);
     if (count == 0) {
         return 0;
@@ -189,9 +202,7 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             perror("open");
             exit(1);
         }
-        if (!forget) {
-            file_pipe = last;
-        }
+        file_pipe = last;
     }
     int p[2];
     int pid = 0;
@@ -302,6 +313,27 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
         (*str)[size] = '\0';
     }
     if (forget) {
+        int i = 0;
+        while (close_pipes[i] != -1) {
+            i++;
+        }
+        if (i != 0) {
+            int j = 0;
+            int *last = (hanged_pids_end - 1)->pipes;
+            while (last[j] != -1) {
+                j++;
+            }
+            last = realloc(last, (i + j + 1) * sizeof(int));
+            if (last == NULL) {
+                perror("realloc");
+                exit(1);
+            }
+            for (int k = 0; k < i; k++) {
+                last[j + k] = close_pipes[k];
+            }
+            last[i + j] = -1;
+            (hanged_pids_end - 1)->pipes = last;
+        }
         return 0;
     }
     int status;
@@ -338,6 +370,13 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
             }
         }
     }
+    while (*close_pipes != -1) {
+        if (close(*close_pipes) == -1) {
+            perror("close");
+            exit(1);
+        }
+        close_pipes++;
+    }
     free(pids);
     free(pipes);
     if (SIG_INT) {
@@ -350,14 +389,6 @@ int run_commands(Command *commands, char **str, char *file, char *file_input,
         return WEXITSTATUS(status);
     }
 }
-typedef struct CommandReturn {
-    Command *command;
-    char *file;
-    char *file_input;
-    char forget;
-    int *close_pipes;
-    int length;
-} CommandReturn;
 enum State {
     NONE,
     SINGLEQUOTE,
@@ -398,7 +429,6 @@ CommandReturn get_commands(char *line, char is_command) {
     commands[i][j] = malloc(strlen(line) + 1);
     if (commands[i][j] == NULL) {
         perror("malloc");
-        free_commands(commands);
         exit(1);
     }
     int k = 0;
@@ -454,13 +484,11 @@ CommandReturn get_commands(char *line, char is_command) {
                 commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
                 if (commands[i] == NULL) {
                     perror("malloc");
-                    free_commands(commands);
                     exit(1);
                 }
                 commands[i][j] = malloc(strlen(line) + 1);
                 if (commands[i][j] == NULL) {
                     perror("malloc");
-                    free_commands(commands);
                     exit(1);
                 }
                 break;
@@ -472,7 +500,6 @@ CommandReturn get_commands(char *line, char is_command) {
                     commands[i][j] = malloc(strlen(line) + 1);
                     if (commands[i][j] == NULL) {
                         perror("malloc");
-                        free_commands(commands);
                         exit(1);
                     }
                 }
@@ -555,7 +582,6 @@ CommandReturn get_commands(char *line, char is_command) {
                 ret.file_input = malloc(n + 1);
                 if (ret.file_input == NULL) {
                     perror("malloc");
-                    free_commands(commands);
                     exit(1);
                 }
                 strncpy(ret.file_input, line, n);
@@ -585,7 +611,6 @@ CommandReturn get_commands(char *line, char is_command) {
                 ret.file = malloc(n + 1);
                 if (ret.file == NULL) {
                     perror("malloc");
-                    free_commands(commands);
                     exit(1);
                 }
                 strncpy(ret.file, line, n);
@@ -604,7 +629,7 @@ CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
-            run_commands(c.command, &buf, NULL, NULL, 0, STDIN_FILENO, -1);
+            run_commands(c, &buf, STDIN_FILENO, -1);
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(
                     commands[i][j], ret.length + strlen(line) + strlen(buf));
@@ -617,7 +642,7 @@ CommandReturn get_commands(char *line, char is_command) {
             strcat(commands[i][j], buf);
             k += strlen(buf);
             free(buf);
-            free_commands(c.command);
+            free_commands_ret(c);
             break;
         case COMMANDFILEINPUT:
             c = get_commands(line, 1);
@@ -629,7 +654,7 @@ CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
-            run_commands(c.command, NULL, NULL, NULL, 1, -1, -1);
+            run_commands(c, NULL, -1, -1);
             PidClosePipes pipes = *(hanged_pids_end - 1);
             int pipeo = pipes.pipes[0];
             strcat(buf, "/dev/fd/");
@@ -647,7 +672,7 @@ CommandReturn get_commands(char *line, char is_command) {
             strcat(commands[i][j], buf);
             k += strlen(buf);
             free(buf);
-            free_commands(c.command);
+            free_commands_ret(c);
             break;
         case COMMANDFILE:
             c = get_commands(line, 1);
@@ -664,7 +689,7 @@ CommandReturn get_commands(char *line, char is_command) {
                 perror("pipe");
                 exit(1);
             }
-            run_commands(c.command, NULL, NULL, NULL, 1, p[0], p[1]);
+            run_commands(c, NULL, p[0], p[1]);
             strcat(buf, "/dev/fd/");
             sprintf(str, "%d", p[1]);
             strcat(buf, str);
@@ -690,7 +715,7 @@ CommandReturn get_commands(char *line, char is_command) {
             strcat(commands[i][j], buf);
             k += strlen(buf);
             free(buf);
-            free_commands(c.command);
+            free_commands_ret(c);
             break;
         }
         last = *line;
@@ -711,7 +736,7 @@ CommandReturn get_commands(char *line, char is_command) {
     }
     commands[i + 1] = NULL;
     if (state != NONE || last == '|' || is_command) {
-        free_commands(commands);
+        free_commands_ret(ret);
         ret.command = NULL;
         return ret;
     }
@@ -753,34 +778,8 @@ int main() {
         }
         CommandReturn commands = get_commands(line, 0);
         free(line);
-        if (commands.command == NULL) {
-            printf("ERROR\n");
-        } else {
-            ret = run_commands(commands.command, NULL, commands.file,
-                               commands.file_input, commands.forget,
-                               STDIN_FILENO, -1);
-            if (commands.forget) {
-                *close_pipes_on_pid_end = commands.close_pipes;
-                close_pipes_on_pid_end++;
-            } else {
-                int *close_pipes = commands.close_pipes;
-                while (*close_pipes != -1) {
-                    if (close(*close_pipes) == -1) {
-                        perror("close");
-                        exit(1);
-                    }
-                    close_pipes++;
-                }
-                free(commands.close_pipes);
-            }
-            free_commands(commands.command);
-        }
-        if (commands.file != NULL) {
-            free(commands.file);
-        }
-        if (commands.file_input != NULL) {
-            free(commands.file_input);
-        }
+        ret = run_commands(commands, NULL, STDIN_FILENO, -1);
+        free_commands_ret(commands);
         handle_hanged();
     }
 }
