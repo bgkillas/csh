@@ -12,7 +12,12 @@ char *CURRENT_DIR;
 PidClosePipes hanged_pids[BUF_SIZE];
 PidClosePipes *hanged_pids_end = hanged_pids;
 volatile int SIG_INT = 0;
-void handler(int signo, siginfo_t *info, void *context) { SIG_INT = 1; }
+void handler(int signo, siginfo_t *info, void *context) {
+    (void)signo;
+    (void)info;
+    (void)context;
+    SIG_INT = 1;
+}
 int main() {
     struct sigaction act = {0};
     act.sa_flags = SA_SIGINFO;
