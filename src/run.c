@@ -72,9 +72,6 @@ void handle_hanged() {
             hanged_pids_end--;
         }
     }
-    if (!do_exit) {
-        hanged_pids_end = hanged_pids;
-    }
 }
 int builtin(Command command) {
     if (strcmp(*command, "exit") == 0) {
@@ -221,18 +218,14 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
             }
             pidpipes.pipes = malloc((3 + i) * sizeof(int));
             int j = 0;
-            if (last == -1) {
-                if (file_pipe != -1) {
-                    pidpipes.pipes[0] = file_pipe;
-                    j = 1;
-                }
-            } else if (file_pipe != -1) {
-                pidpipes.pipes[0] = last;
-                pidpipes.pipes[1] = file_pipe;
-                j = 2;
-            } else {
-                pidpipes.pipes[0] = last;
-                j = 1;
+            if (last != -1) {
+                pidpipes.pipes[j] = last;
+                j++;
+            }
+            if (file_pipe != -1) {
+                pidpipes.pipes[j] = file_pipe;
+                file_pipe = -1;
+                j++;
             }
             for (int k = 0; k < i; k++) {
                 pidpipes.pipes[j + k] = (*close_pipe)[k];
@@ -300,11 +293,12 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
                 exit(1);
             }
         }
-        if (i == 0 && file_pipe != -1) {
+        if (file_pipe != -1) {
             if (close(file_pipe) == -1) {
                 perror("close");
                 exit(1);
             }
+            file_pipe = -1;
         }
         if (pipes[i] != -1) {
             if (close(pipes[i]) == -1) {

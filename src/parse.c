@@ -158,7 +158,9 @@ CommandReturn get_commands(char *line, char is_command) {
                 if (is_command && *line == ')') {
                     if (i == 0 && j == 0 && k == 0) {
                         free(commands[i][j]);
+                        free(commands[i]);
                         commands[i] = NULL;
+                        ret.close_pipes[i] = (int *)-1;
                         return ret;
                     }
                     commands[i][j][k] = '\0';
@@ -385,7 +387,9 @@ CommandReturn get_commands(char *line, char is_command) {
     }
     if (i == 0 && j == 0 && k == 0) {
         free(commands[i][j]);
+        free(commands[i]);
         commands[i] = NULL;
+        ret.close_pipes[i] = (int *)-1;
         return ret;
     }
     commands[i][j][k] = '\0';
