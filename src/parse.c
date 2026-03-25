@@ -224,7 +224,8 @@ CommandReturn get_commands(char *line, char is_command) {
                     if (!escape) {
                         if (line[n] == '\\') {
                             escape = 1;
-                        } else if (line[n] == '>' || line[n] == '&') {
+                        } else if (line[n] == '>' || line[n] == '&' ||
+                                   (is_command && line[n] == ')')) {
                             break;
                         }
                     } else {
@@ -240,6 +241,7 @@ CommandReturn get_commands(char *line, char is_command) {
                 strncpy(ret.file_input, line, n);
                 ret.file_input[n] = '\0';
                 line += n - 1;
+                ret.length += n - 1;
                 state = NONE;
             }
             break;
@@ -253,7 +255,8 @@ CommandReturn get_commands(char *line, char is_command) {
                     if (!escape) {
                         if (line[n] == '\\') {
                             escape = 1;
-                        } else if (line[n] == '<' || line[n] == '&') {
+                        } else if (line[n] == '<' || line[n] == '&' ||
+                                   (is_command && line[n] == ')')) {
                             break;
                         }
                     } else {
@@ -269,12 +272,14 @@ CommandReturn get_commands(char *line, char is_command) {
                 strncpy(ret.file, line, n);
                 ret.file[n] = '\0';
                 line += n - 1;
+                ret.length += n - 1;
                 state = NONE;
             }
             break;
         case COMMAND:
             c = get_commands(line, 1);
             line += c.length;
+            ret.length += c.length;
             state = NONE;
             buf = malloc(BUF_SIZE);
             if (buf == NULL) {
@@ -300,6 +305,7 @@ CommandReturn get_commands(char *line, char is_command) {
         case COMMANDFILEINPUT:
             c = get_commands(line, 1);
             line += c.length;
+            ret.length += c.length;
             state = NONE;
             buf = malloc(32);
             if (buf == NULL) {
@@ -331,6 +337,7 @@ CommandReturn get_commands(char *line, char is_command) {
         case COMMANDFILE:
             c = get_commands(line, 1);
             line += c.length;
+            ret.length += c.length;
             state = NONE;
             buf = malloc(32);
             if (buf == NULL) {
