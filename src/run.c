@@ -44,11 +44,12 @@ void handle_hanged() {
     int status;
     for (PidClosePipes *p = hanged_pids_end - 1; p >= hanged_pids; p--) {
         if (p->pid != -1) {
-            if (waitpid(p->pid, &status, WNOHANG) == -1) {
+            int n = waitpid(p->pid, &status, WNOHANG);
+            if (n == -1) {
                 perror("waitpid");
                 exit(1);
             }
-            if (WIFEXITED(status)) {
+            if (n == p->pid && WIFEXITED(status)) {
                 if (do_exit) {
                     p->pid = -1;
                 } else {
