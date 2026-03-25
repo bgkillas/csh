@@ -21,7 +21,7 @@ typedef struct CommandReturn {
     char *file;
     char *file_input;
     char forget;
-    int *close_pipes;
+    int **close_pipes;
     int length;
 } CommandReturn;
 void free_commands(Command *commands) {
@@ -46,6 +46,13 @@ void free_commands_ret(CommandReturn commands) {
     }
     if (commands.file_input != NULL) {
         free(commands.file_input);
+    }
+    int **close_pipes = commands.close_pipes;
+    while (*close_pipes != (int *)-1) {
+        if (*close_pipes != NULL) {
+            free(*close_pipes);
+        }
+        close_pipes++;
     }
     free(commands.close_pipes);
 }
@@ -168,7 +175,7 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
     }
     char *file = commandret.file;
     char *file_input = commandret.file_input;
-    int *close_pipes = commandret.close_pipes;
+    int **close_pipes = commandret.close_pipes;
     char forget = commandret.forget;
     int count = cmdlen(commands);
     if (count == 0) {
@@ -206,6 +213,7 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
     }
     int p[2];
     int pid = 0;
+    int **close_pipe = commandret.close_pipes;
     while (*commands != NULL) {
         char use_stdout = commands[1] == NULL && str == NULL && !no_stdinout;
         if (!use_stdout && pipe(p) == -1) {
@@ -255,24 +263,31 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
         if (forget) {
             PidClosePipes pidpipes;
             pidpipes.pid = pid;
-            pidpipes.pipes = malloc(3 * sizeof(int));
+            int i = 0;
+            if (*close_pipe != NULL) {
+                while ((*close_pipe)[i] != -1) {
+                    i++;
+                }
+            }
+            pidpipes.pipes = malloc((3 + i) * sizeof(int));
+            int j = 0;
             if (last == -1) {
                 if (file_pipe != -1) {
                     pidpipes.pipes[0] = file_pipe;
-                    pidpipes.pipes[1] = -1;
-                } else {
-                    pidpipes.pipes[0] = -1;
+                    j = 1;
                 }
+            } else if (file_pipe != -1) {
+                pidpipes.pipes[0] = last;
+                pidpipes.pipes[1] = file_pipe;
+                j = 2;
             } else {
-                if (file_pipe != -1) {
-                    pidpipes.pipes[0] = last;
-                    pidpipes.pipes[1] = file_pipe;
-                    pidpipes.pipes[2] = -1;
-                } else {
-                    pidpipes.pipes[0] = last;
-                    pidpipes.pipes[1] = -1;
-                }
+                pidpipes.pipes[0] = last;
+                j = 1;
             }
+            for (int k = 0; k < i; k++) {
+                pidpipes.pipes[j + k] = (*close_pipe)[k];
+            }
+            pidpipes.pipes[i + j] = -1;
             *hanged_pids_end = pidpipes;
             hanged_pids_end++;
         } else {
@@ -282,10 +297,7 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
             pids++;
         }
         commands++;
-    }
-    if (!forget) {
-        pipes -= count;
-        pids -= count;
+        close_pipe++;
     }
     if (str != NULL) {
         forget = 0;
@@ -313,29 +325,10 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
         (*str)[size] = '\0';
     }
     if (forget) {
-        int i = 0;
-        while (close_pipes[i] != -1) {
-            i++;
-        }
-        if (i != 0) {
-            int j = 0;
-            int *last = (hanged_pids_end - 1)->pipes;
-            while (last[j] != -1) {
-                j++;
-            }
-            last = realloc(last, (i + j + 1) * sizeof(int));
-            if (last == NULL) {
-                perror("realloc");
-                exit(1);
-            }
-            for (int k = 0; k < i; k++) {
-                last[j + k] = close_pipes[k];
-            }
-            last[i + j] = -1;
-            (hanged_pids_end - 1)->pipes = last;
-        }
         return 0;
     }
+    pipes -= count;
+    pids -= count;
     int status;
     for (int i = 0; i < count; i++) {
         if (SIG_INT && kill(pids[i], 9) == -1) {
@@ -369,13 +362,16 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
                 exit(1);
             }
         }
-    }
-    while (*close_pipes != -1) {
-        if (close(*close_pipes) == -1) {
-            perror("close");
-            exit(1);
+        if (close_pipes[i] != NULL) {
+            int *close_pip = close_pipes[i];
+            while (*close_pip != -1) {
+                if (close(*close_pip) == -1) {
+                    perror("close");
+                    exit(1);
+                }
+                close_pip++;
+            }
         }
-        close_pipes++;
     }
     free(pids);
     free(pipes);
@@ -413,13 +409,13 @@ CommandReturn get_commands(char *line, char is_command) {
     ret.forget = 0;
     ret.command = commands;
     ret.length = 0;
-    ret.close_pipes = malloc(sizeof(int) * (strlen(line) + 2));
+    ret.close_pipes = malloc(sizeof(int) * (strlen(line) / 2 + 2));
     if (ret.close_pipes == NULL) {
         perror("malloc");
         exit(1);
     }
-    ret.close_pipes[0] = -1;
     int i = 0;
+    ret.close_pipes[i] = NULL;
     commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
     if (commands[i] == NULL) {
         perror("malloc");
@@ -468,6 +464,7 @@ CommandReturn get_commands(char *line, char is_command) {
                 if (last == '|' || last == '\0' || (last == ' ' && j == 0)) {
                     commands[i][j + 1] = NULL;
                     commands[i + 1] = NULL;
+                    ret.close_pipes[i + 1] = (int *)-1;
                     free_commands(commands);
                     ret.command = NULL;
                     return ret;
@@ -481,6 +478,7 @@ CommandReturn get_commands(char *line, char is_command) {
                 }
                 j = 0;
                 i++;
+                ret.close_pipes[i] = NULL;
                 commands[i] = malloc(sizeof(Command) * (strlen(line) / 2 + 2));
                 if (commands[i] == NULL) {
                     perror("malloc");
@@ -519,6 +517,7 @@ CommandReturn get_commands(char *line, char is_command) {
                         commands[i][j + 1] = NULL;
                     }
                     commands[i + 1] = NULL;
+                    ret.close_pipes[i + 1] = (int *)-1;
                     if (state != NONE || last == '|') {
                         free_commands(commands);
                         ret.command = NULL;
@@ -654,6 +653,7 @@ CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
+            c.forget = 1;
             run_commands(c, NULL, -1, -1);
             PidClosePipes pipes = *(hanged_pids_end - 1);
             int pipeo = pipes.pipes[0];
@@ -689,11 +689,20 @@ CommandReturn get_commands(char *line, char is_command) {
                 perror("pipe");
                 exit(1);
             }
+            c.forget = 1;
             run_commands(c, NULL, p[0], p[1]);
             strcat(buf, "/dev/fd/");
             sprintf(str, "%d", p[1]);
             strcat(buf, str);
-            int *close_pipes = ret.close_pipes;
+            if (ret.close_pipes[i] == NULL) {
+                ret.close_pipes[i] = malloc((strlen(line) + 1) * sizeof(int));
+                if (ret.close_pipes[i] == NULL) {
+                    perror("malloc");
+                    exit(1);
+                }
+                *ret.close_pipes[i] = -1;
+            }
+            int *close_pipes = ret.close_pipes[i];
             while (*close_pipes != -1) {
                 close_pipes++;
             }
@@ -735,6 +744,7 @@ CommandReturn get_commands(char *line, char is_command) {
         commands[i][j + 1] = NULL;
     }
     commands[i + 1] = NULL;
+    ret.close_pipes[i + 1] = (int *)-1;
     if (state != NONE || last == '|' || is_command) {
         free_commands_ret(ret);
         ret.command = NULL;
