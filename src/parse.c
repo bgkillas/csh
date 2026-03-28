@@ -217,6 +217,10 @@ CommandReturn get_commands(char *line, char is_command) {
         case FILEI:
             if (*line == '(') {
                 state = COMMANDFILEINPUT;
+            } else if (ret.file_input != NULL) {
+                free_commands_ret(ret);
+                ret.command = NULL;
+                return ret;
             } else {
                 int n = 0;
                 char escape = 0;
@@ -248,6 +252,10 @@ CommandReturn get_commands(char *line, char is_command) {
         case FILEO:
             if (*line == '(') {
                 state = COMMANDFILE;
+            } else if (ret.file != NULL) {
+                free_commands_ret(ret);
+                ret.command = NULL;
+                return ret;
             } else {
                 int n = 0;
                 char escape = 0;
@@ -287,6 +295,7 @@ CommandReturn get_commands(char *line, char is_command) {
                 exit(1);
             }
             *buf = '\0';
+            c.forget = 0;
             run_commands(c, &buf, STDIN_FILENO, -1);
             if (strlen(buf) >= c.length) {
                 commands[i][j] = realloc(

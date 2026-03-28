@@ -188,7 +188,7 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
             }
             if (use_stdout) {
                 if (file != NULL) {
-                    p[1] = open(file, O_CREAT | O_WRONLY, 0644);
+                    p[1] = open(file, O_CREAT | O_WRONLY | O_TRUNC, 0644);
                     if (p[1] == -1) {
                         perror("open");
                         exit(1);
