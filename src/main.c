@@ -53,7 +53,11 @@ int main() {
         }
         CommandReturn commands = get_commands(line, 0);
         free(line);
-        ret = run_commands(commands, NULL, STDIN_FILENO, -1);
+        int stdin = STDIN_FILENO;
+        if (commands.forget) {
+            stdin = -1;
+        }
+        ret = run_commands(commands, NULL, stdin, -1);
         free_commands_ret(commands);
         handle_hanged();
     }

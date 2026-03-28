@@ -8,7 +8,7 @@
 #include "parse.h"
 #include "run.h"
 void run_command(Command command, int input, int output) {
-    if (input != -1 && input != STDIN_FILENO) {
+    if (input != STDIN_FILENO) {
         if (dup2(input, STDIN_FILENO) == -1) {
             perror("dup2");
             exit(1);
@@ -160,11 +160,16 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
         file_pipe = last;
     }
     int p[2];
+    int pi[2];
     int pid = 0;
     int **close_pipe = commandret.close_pipes;
     while (*commands != NULL) {
         char use_stdout = commands[1] == NULL && str == NULL && !no_stdinout;
         if (!use_stdout && pipe(p) == -1) {
+            perror("pipe");
+            exit(1);
+        }
+        if (last == -1 && pipe(pi) == -1) {
             perror("pipe");
             exit(1);
         }
@@ -197,7 +202,24 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
                     exit(1);
                 }
             }
+            if (last == -1) {
+                if (close(pi[1]) == -1) {
+                    perror("close");
+                    exit(1);
+                }
+                last = pi[0];
+            }
             run_command(*commands, last, p[1]);
+        }
+        if (last == -1) {
+            if (close(pi[0]) == -1) {
+                perror("close");
+                exit(1);
+            }
+            if (close(pi[1]) == -1) {
+                perror("close");
+                exit(1);
+            }
         }
         if (!use_stdout) {
             if (close(p[1]) == -1) {
