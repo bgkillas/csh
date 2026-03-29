@@ -209,6 +209,7 @@ CommandReturn get_commands(char *line, char is_command) {
             if (*line == '(') {
                 state = COMMAND;
             } else {
+                ret.close_pipes[i + 1] = (int *)-1;
                 free_commands(commands);
                 ret.command = NULL;
                 return ret;
@@ -218,7 +219,8 @@ CommandReturn get_commands(char *line, char is_command) {
             if (*line == '(') {
                 state = COMMANDFILEINPUT;
             } else if (ret.file_input != NULL) {
-                free_commands_ret(ret);
+                ret.close_pipes[i + 1] = (int *)-1;
+                free_commands(commands);
                 ret.command = NULL;
                 return ret;
             } else {
@@ -228,7 +230,8 @@ CommandReturn get_commands(char *line, char is_command) {
                     if (!escape) {
                         if (line[n] == '\\') {
                             escape = 1;
-                        } else if (line[n] == '>' || line[n] == '&' ||
+                        } else if (line[n] == '>' || line[n] == '<' ||
+                                   line[n] == '&' ||
                                    (is_command && line[n] == ')')) {
                             break;
                         }
@@ -253,7 +256,8 @@ CommandReturn get_commands(char *line, char is_command) {
             if (*line == '(') {
                 state = COMMANDFILE;
             } else if (ret.file != NULL) {
-                free_commands_ret(ret);
+                ret.close_pipes[i + 1] = (int *)-1;
+                free_commands(commands);
                 ret.command = NULL;
                 return ret;
             } else {
@@ -263,7 +267,8 @@ CommandReturn get_commands(char *line, char is_command) {
                     if (!escape) {
                         if (line[n] == '\\') {
                             escape = 1;
-                        } else if (line[n] == '<' || line[n] == '&' ||
+                        } else if (line[n] == '<' || line[n] == '>' ||
+                                   line[n] == '&' ||
                                    (is_command && line[n] == ')')) {
                             break;
                         }

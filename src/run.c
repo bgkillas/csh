@@ -149,7 +149,6 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
             exit(1);
         }
     }
-    char no_stdinout = last == -1;
     int file_pipe = -1;
     if (file_input != NULL) {
         last = open(file_input, O_CREAT | O_RDONLY, 0644);
@@ -164,7 +163,7 @@ int run_commands(CommandReturn commandret, char **str, int last, int to_close) {
     int pid = 0;
     int **close_pipe = commandret.close_pipes;
     while (*commands != NULL) {
-        char use_stdout = commands[1] == NULL && str == NULL && !no_stdinout;
+        char use_stdout = commands[1] == NULL && str == NULL;
         if (!use_stdout && pipe(p) == -1) {
             perror("pipe");
             exit(1);
